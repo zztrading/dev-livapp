@@ -1,0 +1,207 @@
+import { ExerciseConfig } from './guidedLesson';
+
+// ===========================================
+// V8 "Read & Listen" Premium — Tipos
+// ===========================================
+
+/**
+ * V8Section — Uma seção de conteúdo com áudio individual
+ */
+export interface V8AiImageMeta {
+  prompt: string;
+  caption?: string;
+}
+
+export interface V8VideoMeta {
+  src: string;
+  caption?: string;
+  /** Trigger media reveal when audio reaches this fraction (0-1) of the section. Default: 0.5 */
+  triggerAtPercent?: number;
+  /** Trigger media reveal when audio reaches this absolute time (seconds). Overrides triggerAtPercent if set. */
+  triggerAtSeconds?: number;
+}
+
+export interface V8Section {
+  id: string;
+  title: string;
+  content: string;
+  imageUrl?: string;
+  audioUrl: string;
+  audioDurationSeconds?: number;
+  aiImages?: V8AiImageMeta[];
+  videos?: V8VideoMeta[];
+}
+
+/**
+ * V8InlineQuiz — Quiz inserido ENTRE seções
+ */
+export interface V8InlineQuiz {
+  id: string;
+  afterSectionIndex: number;
+  question: string;
+  options: Array<{
+    id: string;
+    text: string;
+    isCorrect: boolean;
+  }>;
+  explanation: string;
+  reinforcement?: string;
+  audioUrl?: string;
+  reinforcementAudioUrl?: string;
+  explanationAudioUrl?: string;
+
+  quizType?: 'multiple-choice' | 'true-false' | 'fill-blank';
+
+  // Campos para true-false
+  statement?: string;
+  isTrue?: boolean;
+
+  // Campos para fill-blank
+  sentenceWithBlank?: string;
+  correctAnswer?: string;
+  acceptableAnswers?: string[];
+
+  // Phase 7 (Gap 5): Chip options for fill-blank (correct + distractors)
+  chipOptions?: string[];
+}
+
+/**
+ * V8InlinePlayground — Playground inserido ENTRE seções
+ */
+export interface V8InlinePlayground {
+  id: string;
+  afterSectionIndex: number;
+
+  title: string;
+  subtitle?: string;
+  instruction: string;
+
+  narration?: string;
+  audioUrl?: string;
+
+  amateurPrompt: string;
+  professionalPrompt: string;
+  amateurResult?: string;
+  professionalResult?: string;
+
+  userChallenge?: {
+    instruction: string;
+    challengePrompt: string;
+    hints: string[];
+    evaluationCriteria: string[];
+    scoring?: {
+      maxScore: number;
+      rubric: Array<{ criterion: string; points: number }>;
+    };
+    maxAttempts?: number;
+  };
+
+  successMessage: string;
+  tryAgainMessage: string;
+  successAudioUrl?: string;
+  tryAgainAudioUrl?: string;
+  hintOnFail?: string[];
+
+  offlineFallback?: {
+    message: string;
+    exampleAnswer: string;
+  };
+
+  /** When true, generate an AI image from the user's prompt after evaluation */
+  generateAiImage?: boolean;
+}
+
+/**
+ * V8InsightBlock — Insight de recompensa inserido ENTRE seções
+ */
+export interface V8InsightBlock {
+  id: string;
+  afterSectionIndex: number;
+  title: string;
+  insightText: string;
+  creditsReward: number;
+  audioUrl?: string;
+}
+
+/**
+ * V8InlineCompleteSentence — Complete-sentence exercise inserido ENTRE seções (Phase 8, Gap 4)
+ * Estilo Coursiv: chips arrastáveis para preencher lacunas
+ * V8-C01: exatamente 4 lacunas, máx 14 palavras, chips = correctAnswers only (sem distratores)
+ */
+export interface V8InlineCompleteSentence {
+  id: string;
+  afterSectionIndex: number;
+  title: string;
+  instruction: string;
+  sentences: Array<{
+    id: string;
+    text: string;              // Frase com _______ como placeholder
+    correctAnswers: string[];  // Respostas corretas
+    options: string[];         // Chips disponíveis (corretas + distratoras)
+    hints?: string[];
+  }>;
+  audioUrl?: string;
+}
+
+/**
+ * V8InlineExercise — Exercício interativo inline ENTRE seções (V8-C01)
+ * Suporta 8 tipos: true-false, multiple-choice, complete-sentence, fill-in-blanks,
+ * flipcard-quiz, scenario-selection, platform-match, timed-quiz
+ */
+export interface V8InlineExercise {
+  id: string;
+  afterSectionIndex: number;
+  type: 'true-false' | 'multiple-choice' | 'complete-sentence' | 'fill-in-blanks' | 'flipcard-quiz' | 'scenario-selection' | 'platform-match' | 'timed-quiz';
+  title: string;
+  instruction: string;
+  data: Record<string, any>;
+  audioUrl?: string;
+  successMessage?: string;
+  tryAgainMessage?: string;
+}
+
+/**
+ * V8LearnAndGrow — Bloco de síntese pedagógica obrigatório pós-Playground
+ * 3 frases: "Percebeu a virada?", "Antes era X, agora é Y", "Aplica hoje em..."
+ */
+export interface V8LearnAndGrow {
+  id: string;
+  whatChanged: string;       // "Percebeu a virada?" — o que mudou
+  beforeAfter: string;       // "Antes era X, agora é Y"
+  practicalExample: string;  // "Aplica hoje em..." — 1 exemplo prático
+  audioUrl?: string;
+}
+
+/**
+ * V8LessonData — Armazenado em lessons.content (JSONB)
+ */
+export interface V8LessonData {
+  contentVersion: 'v8';
+  title: string;
+  description?: string;
+  contractPattern?: 'V8-C01' | 'V8-C02' | 'V8-C03' | 'V8-B01' | 'V8-B02' | 'V8-B03';
+  narrativeVariation?: 'everyday' | 'professional' | 'curiosity' | 'variations-editor';
+  variationLever?: string;
+  sections: V8Section[];
+  inlineQuizzes: V8InlineQuiz[];
+  inlinePlaygrounds?: V8InlinePlayground[];
+  inlineInsights?: V8InsightBlock[];
+  inlineCompleteSentences?: V8InlineCompleteSentence[];  // Phase 8 (Gap 4)
+  inlineExercises?: V8InlineExercise[];  // Phase 9: Inline exercises (4 reliable types)
+  learnAndGrow?: V8LearnAndGrow;          // Bloco de síntese pedagógica pós-Playground
+  exercises: ExerciseConfig[];
+}
+
+/**
+ * V8PlayerState — Estado do player (gerenciado por useV8Player hook)
+ */
+export interface V8PlayerState {
+  currentIndex: number;
+  mode: 'read' | 'listen';
+  isPlaying: boolean;
+  playbackSpeed: number;
+  phase: 'mode-select' | 'content' | 'exercises' | 'completion';
+  scores: number[];
+  playgroundScores: Record<string, number>;  // Phase 4 (Gap 3): playground.id → score
+  startedAt: number | null;  // epoch ms — marcado quando o usuário sai do mode-select
+}

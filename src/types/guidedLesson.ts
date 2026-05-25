@@ -1,0 +1,246 @@
+export interface WordTimestamp {
+  word: string;
+  start: number; // em segundos
+  end: number; // em segundos
+}
+
+export type LessonSectionType = 'text' | 'playground' | 'end-audio';
+
+export type PlaygroundType = 
+  | 'real-playground'
+  | 'multiple-choice-with-feedback'
+  | 'interactive-simulation';
+
+export interface RealPlaygroundConfig {
+  type: 'real-playground';
+  title: string;
+  maiaMessage: string;
+  scenario: {
+    title: string;
+    description: string;
+  };
+  prefilledText: string;
+  userPlaceholder: string;
+  validation: {
+    minLength: number;
+    requiredKeywords?: string[][];
+    feedback: {
+      tooShort: string;
+      good: string;
+      excellent: string;
+    };
+  };
+}
+
+export interface InteractiveSimulationStep {
+  step: number;
+  week?: string;
+  context?: string;
+  iaKnowledge?: string;
+  prompt: string;
+  options: Array<{ id: string; title: string; genre: string; emoji: string; description?: string }> | 'dynamic';
+  logic?: string;
+  feedback: string | {
+    title: string;
+    learning: string[];
+    confidence?: string;
+    visual?: string;
+  };
+}
+
+export interface InteractiveSimulationConfig {
+  type: 'interactive-simulation';
+  title: string;
+  intro?: {
+    icon: string;
+    title: string;
+    description: string;
+    visual: string;
+  };
+  scenario: { icon: string; text: string };
+  steps: InteractiveSimulationStep[];
+  completion: {
+    visual: string;
+    chart?: {
+      type: string;
+      data: any[];
+    };
+    summary?: {
+      icon: string;
+      title: string;
+      insights: string[];
+      realWorldContext?: {
+        title: string;
+        points: string[];
+      };
+    };
+    message: string;
+    badge: { id: string; title: string; icon: string };
+  };
+}
+
+// 🎯 V2/V3: Dados estruturados para PlaygroundBridge (mesmo formato)
+export interface PlaygroundExampleDataV2 {
+  title: string;              // título curto do modal (~60 chars)
+  context: string;            // I DO: 1-2 frases (20-35 palavras)
+  requirements: string[];     // WE DO: 4 itens curtos (10-14 palavras cada)
+  examplePrompt: string;      // YOU DO: 1 prompt com [colchetes]
+}
+
+// V3 usa mesmo formato do V2
+export type PlaygroundExampleDataV3 = PlaygroundExampleDataV2;
+
+export interface PlaygroundConfig {
+  instruction?: string;  // 🆕 Opcional para compatibilidade com diferentes formatos
+  type: PlaygroundType;
+  triggerKeyword?: string;
+  triggerAfterSection?: number;
+  playgroundDelay?: number; // Delay adicional em segundos antes de mostrar o playground (útil para dar tempo da frase completar)
+  options?: string[];
+  feedback?: Record<string, string>;
+  realConfig?: RealPlaygroundConfig;
+  simulationConfig?: InteractiveSimulationConfig;
+  playgroundExampleV2?: PlaygroundExampleDataV2; // V2: 2 modais com wizard
+  playgroundExampleV3?: PlaygroundExampleDataV3; // V3: 1 modal único com 3 blocos (I DO / WE DO / YOU DO)
+  useBridgeVersion?: 'v2' | 'v3'; // Qual versão usar (default: v2 para retrocompatibilidade)
+}
+
+export interface ExerciseConfig {
+  id: string;
+  type: 'drag-drop' | 'complete-sentence' | 'scenario-selection' | 'fill-in-blanks' | 'true-false' | 'platform-match' | 'data-collection' | 'multiple-choice' | 'flipcard-quiz' | 'timed-quiz';
+  title: string;
+  instruction: string;
+  data: any;
+  passingScore?: number; // Nota mínima para passar (default: 70)
+  maxAttempts?: number; // Máximo de tentativas permitidas (default: ilimitado)
+}
+
+export interface FinalPlaygroundStep {
+  stepNumber: number;
+  title: string;
+  // 🚫 'textarea' (caixa de texto livre) foi removido do contrato em 2026-05.
+  type: 'radio' | 'prompt-builder';
+  question: string;
+  options?: Array<{ value: string; label: string; description: string; icon: string }>;
+  placeholder?: string;
+  minLength?: number;
+  template?: {
+    parts: Array<{
+      id: string;
+      label: string;
+      placeholder: string;
+      hint: string;
+    }>;
+  };
+}
+
+export interface FinalPlaygroundConfig {
+  id: string;
+  type: 'guided-prompt-builder';
+  title: string;
+  maiaIntro: string;
+  steps: FinalPlaygroundStep[];
+}
+
+export interface LessonSection {
+  id: string;
+  title?: string; // título descritivo para exibição na sidebar
+  timestamp: number; // segundo em que esta seção começa
+  type?: LessonSectionType; // tipo da seção (text, playground, end-audio)
+  speechBubbleText: string; // frase curta para balão da MAIA (1-2 linhas)
+  visualContent?: string; // texto visual com markdown e emojis (exibido na tela E usado para áudio)
+  content?: string; // campo alternativo de conteúdo (usado em algumas aulas antigas)
+  playgroundConfig?: PlaygroundConfig; // configuração do playground mid-lesson
+  showPlaygroundCall?: boolean; // se deve mostrar card de convite do playground
+  audio_url?: string; // 🆕 V2: URL do áudio específico desta seção
+}
+
+// 🎬 V3: Slide com imagem gerada por IA
+export interface V3Slide {
+  id: string;
+  slideNumber: number;
+  contentIdea: string; // Texto livre: "Mostrar uma pessoa trabalhando com IA"
+  imagePrompt?: string; // Gerado pela IA a partir de contentIdea
+  imageUrl?: string; // URL da imagem gerada (Base64 ou URL pública)
+  timestamp?: number; // Timestamp calculado automaticamente
+}
+
+// 🎬 V3: Dados da lição no modelo de apresentação
+export interface V3LessonData {
+  id: string;
+  title: string;
+  trackId: string;
+  trackName: string;
+  duration: number;
+  audioUrl: string; // Áudio único contínuo
+  wordTimestamps?: WordTimestamp[]; // Timestamps de palavras (opcional)
+  slides: V3Slide[]; // Até 7 slides com imagens
+  exercisesConfig?: ExerciseConfig[];
+  finalPlaygroundConfig?: PlaygroundConfig; // V3 sempre usa playground genérico padrão
+  contentVersion?: number; // Para cache-busting
+  schemaVersion?: number; // Versão da estrutura
+}
+
+// 🎬 V3: Props para componente de renderização
+export interface V3LessonProps {
+  lessonData: V3LessonData;
+  onComplete: (data?: { audioProgress?: number; allExercisesCompleted?: boolean }) => void;
+  onMarkComplete?: () => void | Promise<void>;
+  nextLessonId?: string;
+  nextLessonType?: string;
+  trailId?: string;
+}
+
+// 🎨 V5: Props para DynamicExperienceCard
+export interface ExperienceCardProps {
+  title: string;
+  subtitle?: string;
+  icon?: string; // Nome do ícone Lucide (book, brain, sparkles, zap, star, rocket, etc.)
+  colorScheme?: 'purple' | 'blue' | 'green' | 'orange' | 'pink' | 'cyan' | 'gold' | 'red';
+  chapters?: string[]; // Lista de capítulos/tópicos para exibir com stagger
+  effectDescription?: string; // Descrição do efeito visual
+}
+
+// 🎨 V5: Configuração de um Experience Card
+export interface ExperienceCardConfig {
+  type: string; // Tipo do card (ia-book, ia-image-generator, custom, etc.)
+  sectionIndex: number; // Índice da seção onde aparece
+  anchorText?: string; // Texto âncora para timing (opcional)
+  title?: string; // Título do card (alternativa a props.title)
+  subtitle?: string; // Subtítulo do card (alternativa a props.subtitle)
+  visualScript?: string; // Descrição cinematográfica do visual/animação do card
+  props?: ExperienceCardProps; // Props para DynamicExperienceCard (retrocompatibilidade)
+}
+
+// 🎯 V7: Desafio do usuário com feedback de IA
+export interface UserChallengeConfig {
+  instruction: string;       // Instrução para o usuário
+  challengePrompt: string;   // Prompt de exemplo do desafio
+  hints: string[];           // Dicas para o usuário
+}
+
+export interface GuidedLessonData {
+  id: string;
+  title: string;
+  trackId: string;
+  trackName: string;
+  duration: number;
+  sections: LessonSection[];
+  exercisesConfig?: ExerciseConfig[];
+  finalPlaygroundConfig?: FinalPlaygroundConfig | PlaygroundConfig; // V1/V2: FinalPlaygroundConfig (customizado) | V3: PlaygroundConfig (genérico)
+  contentVersion?: number; // Para cache-busting: incrementa quando conteúdo mudar
+  schemaVersion?: number; // 🆕 Para FASE 4 - controlar versão da estrutura
+  experienceCards?: ExperienceCardConfig[]; // 🆕 V5: Experience cards configurados com animações INCRÍVEIS
+  userChallenge?: UserChallengeConfig; // 🆕 V7: Desafio do usuário com feedback de IA
+}
+
+export interface GuidedLessonProps {
+  lessonData: GuidedLessonData;
+  onComplete: (data?: { audioProgress?: number; allExercisesCompleted?: boolean }) => void;
+  onMarkComplete?: () => void | Promise<void>; // Marcar aula como completa sem navegar (usado pelo ConclusionScreen)
+  audioUrl?: string; // URL do áudio gerado (opcional, pode ser gerado dinamicamente)
+  wordTimestamps?: WordTimestamp[]; // timestamps de palavras para sincronização precisa
+  nextLessonId?: string; // ID da próxima lição (opcional)
+  nextLessonType?: string; // Tipo da próxima lição (opcional)
+  trailId?: string; // ID da trilha (para navegação correta do botão voltar)
+}

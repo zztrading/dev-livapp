@@ -1,0 +1,161 @@
+import { useState } from "react";
+import { createPortal } from "react-dom";
+import { Flag, X, Send, Loader2 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
+
+interface ReportButtonProps {
+  lessonId: string;
+  pageContext?: Record<string, unknown>;
+  /** Visual variant — `light` for white/light backgrounds (V5/V8), `dark` for dark backgrounds (V10 Parts A/C). */
+  variant?: "light" | "dark";
+  /** Optional className override for the trigger button */
+  className?: string;
+}
+
+const CATEGORIES = [
+  "Ortografia ou gramática incorreta",
+  "Conteúdo desatualizado",
+  "Erro de tradução",
+  "Resposta incorreta",
+  "Áudio com problema",
+  "Outro problema",
+];
+
+/**
+ * Universal Report Button — used across V5, V8, V10 lesson players.
+ * Inserts into `lesson_reports` table (lesson_id is text, accepts UUIDs and slugs).
+ */
+export const ReportButton = ({
+  lessonId,
+  pageContext,
+  variant = "light",
+  className,
+}: ReportButtonProps) => {
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState<string | null>(null);
+  const [details, setDetails] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!category) return;
+    setSending(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({ title: "Erro", description: "Você precisa estar logado para reportar.", variant: "destructive" });
+        return;
+      }
+      const { error } = await supabase.from("lesson_reports").insert([{
+        user_id: user.id,
+        lesson_id: lessonId,
+        category,
+        details: details.trim() || null,
+        page_context: (pageContext || {}) as unknown as import("@/integrations/supabase/types").Json,
+      }]);
+      if (error) throw error;
+      toast({ title: "Obrigado!", description: "Seu report foi enviado com sucesso." });
+      setOpen(false);
+      setCategory(null);
+      setDetails("");
+    } catch {
+      toast({ title: "Erro ao enviar", description: "Tente novamente mais tarde.", variant: "destructive" });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const triggerClass =
+    className ??
+    (variant === "dark"
+      ? "p-2 rounded-full text-white/70 hover:text-white hover:bg-white/10 backdrop-blur-sm transition-colors flex-shrink-0"
+      : "p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors flex-shrink-0");
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className={triggerClass}
+        aria-label="Reportar problema"
+        type="button"
+      >
+        <Flag className="w-4 h-4" />
+      </button>
+
+      {createPortal(
+        <AnimatePresence>
+          {open && (
+            <>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setOpen(false)}
+                className="fixed inset-0 z-[60] bg-black/30"
+              />
+              <motion.div
+                initial={{ opacity: 0, y: 40, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 40, scale: 0.95 }}
+                transition={{ duration: 0.25 }}
+                className="fixed inset-x-4 bottom-4 z-[61] max-w-md mx-auto rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden"
+              >
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                  <span className="text-sm font-semibold text-slate-900">Reportar Problema</span>
+                  <button onClick={() => setOpen(false)} className="p-1 rounded-full hover:bg-slate-100" type="button">
+                    <X className="w-4 h-4 text-slate-400" />
+                  </button>
+                </div>
+                <div className="px-4 py-3 space-y-2">
+                  <p className="text-xs text-slate-500 mb-2">Selecione o tipo de problema:</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CATEGORIES.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setCategory(cat)}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                          category === cat
+                            ? "bg-indigo-50 border-indigo-300 text-indigo-700"
+                            : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="px-4 pb-3">
+                  <textarea
+                    value={details}
+                    onChange={(e) => setDetails(e.target.value)}
+                    placeholder="Detalhes adicionais (opcional)..."
+                    className="w-full h-16 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-indigo-400 resize-none"
+                  />
+                </div>
+                <div className="px-4 pb-4">
+                  <button
+                    onClick={handleSubmit}
+                    disabled={!category || sending}
+                    type="button"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                  >
+                    {sending ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Enviando...</>
+                    ) : (
+                      <><Send className="w-4 h-4" /> Enviar Report</>
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
+    </>
+  );
+};
+
+export default ReportButton;

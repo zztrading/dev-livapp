@@ -1,0 +1,604 @@
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { 
+  Rocket, 
+  Wrench, 
+  Activity, 
+  Trash2, 
+  ArrowLeft, 
+  Copy, 
+  CheckCircle, 
+  BookOpen, 
+  Box, 
+  Bug,
+  Timer,
+  Palette,
+  FileJson,
+  MessageSquare,
+  Play,
+  Star,
+  FlaskConical,
+  FolderOpen,
+  ClipboardCheck,
+  ImageIcon,
+  Layers,
+  Flag,
+  DollarSign
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+
+// Admin Hub - Sistema de gestão organizado
+export default function Admin() {
+  const navigate = useNavigate();
+  const [copied, setCopied] = useState(false);
+  const [newReportsCount, setNewReportsCount] = useState<number>(0);
+
+  // Carrega contador de reports novos para o badge
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { count } = await supabase
+        .from('lesson_reports')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'novo');
+      if (active && typeof count === 'number') setNewReportsCount(count);
+    };
+    load();
+    const channel = supabase
+      .channel('admin_reports_badge')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lesson_reports' }, load)
+      .subscribe();
+    return () => { active = false; supabase.removeChannel(channel); };
+  }, []);
+
+  // Fase 4: Removed redundant role check — AdminRoute already verified roles
+
+  const copyJsonToClipboard = async () => {
+    try {
+      // Fase 4: Dynamic import instead of static (saves ~20KB from bundle)
+      const { default: json } = await import('@/data/v7-aula1-input-modelo.json');
+      await navigator.clipboard.writeText(JSON.stringify(json, null, 2));
+      setCopied(true);
+      toast.success('JSON copiado para a área de transferência!');
+      setTimeout(() => setCopied(false), 3000);
+    } catch (err) {
+      toast.error('Erro ao copiar JSON');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-background to-muted p-6">
+      <div className="max-w-5xl mx-auto space-y-8">
+        <Button
+          variant="ghost"
+          onClick={() => navigate('/dashboard')}
+          className="mb-4"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          Voltar ao Dashboard
+        </Button>
+
+        <div className="space-y-2">
+          <h1 className="text-3xl font-bold">Painel Administrativo</h1>
+          <p className="text-muted-foreground">
+            Central de gestão de aulas e ferramentas
+          </p>
+        </div>
+
+        {/* ========== SEÇÃO PRINCIPAL - PIPELINE V7-VV ========== */}
+        <Card className="border-2 border-pink-500/50 bg-gradient-to-r from-pink-500/10 to-purple-500/10 shadow-lg shadow-pink-500/10">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-2xl">
+              <Rocket className="w-8 h-8 text-pink-500" />
+              Pipeline V7-vv
+              <span className="text-xs bg-pink-600 text-white px-2 py-1 rounded-full">PRINCIPAL</span>
+            </CardTitle>
+            <CardDescription className="text-base">
+              Sistema principal de criação de aulas cinematográficas com scenes, anchorActions e ElevenLabs TTS
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+              <p>✅ Scenes sincronizadas</p>
+              <p>✅ AnchorActions</p>
+              <p>✅ ElevenLabs TTS</p>
+              <p>✅ Quiz + Playground</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                size="lg"
+                className="flex-1 min-w-[180px] bg-pink-600 hover:bg-pink-700"
+                onClick={() => navigate('/admin/v7-vv')}
+              >
+                <Rocket className="w-5 h-5 mr-2" />
+                Criar Aula V7-vv
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                className="min-w-[140px] border-pink-500/50 hover:bg-pink-500/10"
+                onClick={() => navigate('/admin/v7/pipeline')}
+              >
+                <Activity className="w-5 h-5 mr-2" />
+                Testar Pipeline
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ========== CRIAR AULA V8 ========== */}
+        <Card className="border-2 border-indigo-500/50 bg-gradient-to-r from-indigo-500/10 to-violet-500/10 shadow-lg shadow-indigo-500/10">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-2xl">
+              <Rocket className="w-8 h-8 text-indigo-500" />
+              Criar Aula V8
+              <span className="text-xs bg-indigo-600 text-white px-2 py-1 rounded-full">READ & LISTEN</span>
+            </CardTitle>
+            <CardDescription className="text-base">
+              Read & Listen com trilha → aula direta (2 níveis, sem camada de curso)
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+              <p>🎧 Áudio segmentado</p>
+              <p>📜 Modo Ler e Ouvir</p>
+              <p>🧩 Hierarquia 2 níveis</p>
+              <p>⚡ Fluxo determinístico</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                size="lg"
+                className="flex-1 min-w-[180px] bg-indigo-600 hover:bg-indigo-700"
+                onClick={() => navigate('/admin/v8/create')}
+              >
+                <Rocket className="w-5 h-5 mr-2" />
+                Abrir Criador V8
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ========== PIPELINE V10 ========== */}
+        <Card className="border-2 border-violet-500/50 bg-gradient-to-r from-violet-500/10 to-indigo-500/10 shadow-lg shadow-violet-500/10">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-2xl">
+              <Rocket className="w-8 h-8 text-violet-500" />
+              Pipeline V10
+              <span className="text-xs bg-violet-600 text-white px-2 py-1 rounded-full">BPA</span>
+            </CardTitle>
+            <CardDescription className="text-base">
+              Prática guiada em 3 partes (Contexto + Passos + Gamificação) com pipeline de 7 etapas
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+              <p>📊 Score de viabilidade</p>
+              <p>📝 27 passos guiados</p>
+              <p>🎙️ Narração ElevenLabs</p>
+              <p>🤖 LIV (assistente IA)</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                size="lg"
+                className="flex-1 min-w-[180px] bg-violet-600 hover:bg-violet-700"
+                onClick={() => navigate('/admin/v10')}
+              >
+                <Rocket className="w-5 h-5 mr-2" />
+                Abrir Pipeline V10
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ========== GESTÃO DE USUÁRIOS ========== */}
+        <Card className="border-2 border-blue-500/50 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 shadow-lg shadow-blue-500/10">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Box className="w-6 h-6 text-blue-500" />
+              Gestão de Usuários
+            </CardTitle>
+            <CardDescription>
+              Gerencie permissões: Admin, Supervisor ou Usuário comum
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              size="lg"
+              className="w-full bg-blue-600 hover:bg-blue-700"
+              onClick={() => navigate('/admin/users')}
+            >
+              <Box className="w-5 h-5 mr-2" />
+              Abrir Gestão de Usuários
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* ========== CARDS DE NAVEGAÇÃO PRINCIPAIS ========== */}
+        <div className="grid gap-6 md:grid-cols-3">
+          
+          {/* GESTÃO MANUAL */}
+          <Card className="border-2 border-primary/20 bg-primary/5 hover:border-primary/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/manual')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Wrench className="w-6 h-6" />
+                Gestão Manual
+              </CardTitle>
+              <CardDescription>
+                Ferramentas manuais para gerenciar lições
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>🔧 Criação de aulas V3, V5, V7</p>
+                <p>🔧 Geração manual de áudio</p>
+                <p>🔧 Sincronização de lições</p>
+                <p>🔧 Gerenciar/deletar lições</p>
+              </div>
+              <Button
+                className="w-full"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/manual');
+                }}
+              >
+                <Wrench className="w-4 h-4 mr-2" />
+                Acessar Ferramentas
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* EXERCÍCIOS & GAMING */}
+          <Card className="border-2 border-violet-500/20 bg-violet-500/5 hover:border-violet-500/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/exercise-library')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookOpen className="w-6 h-6 text-violet-500" />
+                Exercícios & Gaming
+              </CardTitle>
+              <CardDescription>
+                11 tipos de exercício · Demos · Sons · Gamificação
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>📋 11 tipos catalogados (V5/V7)</p>
+                <p>🎮 Demos interativas com score</p>
+                <p>🔊 Sons de vitória/derrota</p>
+                <p>🏆 Confetti & feedback gamificado</p>
+              </div>
+              <Button
+                className="w-full bg-violet-600 hover:bg-violet-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/exercise-library');
+                }}
+              >
+                <BookOpen className="w-4 h-4 mr-2" />
+                Ver Exercícios & Gaming
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* AUDITORIA DE EXERCÍCIOS V8 */}
+          <Card className="border-2 border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/exercise-audit')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ClipboardCheck className="w-6 h-6 text-emerald-500" />
+                Auditoria Exercícios V8
+              </CardTitle>
+              <CardDescription>
+                Auditar, corrigir e publicar exercícios inline V8
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>🔍 152 exercícios (129 inline + 23 complete)</p>
+                <p>🤖 Correção automática com IA</p>
+                <p>✏️ Edição manual + re-geração IA</p>
+                <p>📊 Status: pendente → corrigido → publicado</p>
+              </div>
+              <Button
+                className="w-full bg-emerald-600 hover:bg-emerald-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/exercise-audit');
+                }}
+              >
+                <ClipboardCheck className="w-4 h-4 mr-2" />
+                Abrir Auditoria
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* DEBUGS & DEMOS */}
+          <Card className="border-2 border-orange-500/20 bg-orange-500/5 hover:border-orange-500/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/debugs')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FlaskConical className="w-6 h-6 text-orange-500" />
+                Debugs & Demos
+              </CardTitle>
+              <CardDescription>
+                Testes, diagnósticos e demonstrações
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>🔍 Debug Engine V7</p>
+                <p>⏱️ Teste de sincronização</p>
+                <p>🎨 Design Chat Demo</p>
+                <p>🧊 Demos 3D</p>
+              </div>
+              <Button
+                className="w-full bg-orange-600 hover:bg-orange-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/debugs');
+                }}
+              >
+                <FlaskConical className="w-4 h-4 mr-2" />
+                Ver Debugs & Demos
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* GUIA DE MODELOS */}
+          <Card className="border-2 border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/modelos')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FolderOpen className="w-6 h-6 text-emerald-500" />
+                Guia de Modelos
+              </CardTitle>
+              <CardDescription>
+                Templates JSON e documentação
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>📄 JSON Modelo Aula 1</p>
+                <p>📚 Documentação V7-vv</p>
+                <p>📋 Templates de cenas</p>
+                <p>📖 Guias de uso</p>
+              </div>
+              <Button
+                className="w-full bg-emerald-600 hover:bg-emerald-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/modelos');
+                }}
+              >
+                <FolderOpen className="w-4 h-4 mr-2" />
+                Ver Modelos
+              </Button>
+            </CardContent>
+          </Card>
+
+
+          {/* AI IMAGE LAB */}
+          <Card className="border-2 border-amber-500/20 bg-amber-500/5 hover:border-amber-500/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/image-lab')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ImageIcon className="w-6 h-6 text-amber-500" />
+                AI Image Lab
+              </CardTitle>
+              <CardDescription>
+                Geração de assets com IA · OpenAI + Gemini
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>🖼️ Geração com presets</p>
+                <p>⚡ Batch paralelo (multi-provider)</p>
+                <p>✅ Approve/Reject workflow</p>
+                <p>📊 KPIs de latência e falhas</p>
+              </div>
+              <Button
+                className="w-full bg-amber-600 hover:bg-amber-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/image-lab');
+                }}
+              >
+                <ImageIcon className="w-4 h-4 mr-2" />
+                Abrir Image Lab
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* MICRO VISUAL SANDBOX */}
+          <Card className="border-2 border-pink-500/20 bg-pink-500/5 hover:border-pink-500/40 transition-colors cursor-pointer" onClick={() => navigate('/admin/micro-visual')}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Layers className="w-6 h-6 text-pink-500" />
+                Micro Visual
+                <span className="text-xs bg-pink-600 text-white px-2 py-0.5 rounded-full">SANDBOX</span>
+              </CardTitle>
+              <CardDescription>
+                Preview interativo dos 13 tipos de micro-visuais
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm space-y-1 text-muted-foreground">
+                <p>✨ 6 novos tipos (stat, step, quote…)</p>
+                <p>🎬 Stage cinematográfico ao vivo</p>
+                <p>🔧 Fix letter-reveal 3D flip</p>
+                <p>📋 JSON de exemplo por tipo</p>
+              </div>
+              <Button
+                className="w-full bg-pink-600 hover:bg-pink-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/admin/micro-visual');
+                }}
+              >
+                <Layers className="w-4 h-4 mr-2" />
+                Abrir Sandbox
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ========== REPORTS DE AULAS ========== */}
+        <Card
+          className="border-2 border-rose-500/50 bg-gradient-to-r from-rose-500/10 to-orange-500/10 shadow-lg shadow-rose-500/10 cursor-pointer"
+          onClick={() => navigate('/admin/lesson-reports')}
+        >
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Flag className="w-6 h-6 text-rose-500" />
+              Reports de Aulas
+              {newReportsCount > 0 && (
+                <Badge variant="destructive" className="ml-1">
+                  {newReportsCount} novo{newReportsCount > 1 ? 's' : ''}
+                </Badge>
+              )}
+            </CardTitle>
+            <CardDescription>
+              Triagem dos problemas reportados pelos alunos no botão "Reportar problema" (V5/V8/V10)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              size="lg"
+              className="w-full bg-rose-600 hover:bg-rose-700"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate('/admin/lesson-reports');
+              }}
+            >
+              <Flag className="w-5 h-5 mr-2" />
+              Abrir Reports
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* ========== AVALIAÇÕES ========== */}
+        <Card className="border-2 border-amber-500/50 bg-gradient-to-r from-amber-500/10 to-yellow-500/10 shadow-lg shadow-amber-500/10 cursor-pointer" onClick={() => navigate('/admin/ratings')}>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Star className="w-6 h-6 text-amber-500" />
+              Avaliações de Aulas
+            </CardTitle>
+            <CardDescription>
+              Feedback dos alunos ao final de cada lição V8
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              size="lg"
+              className="w-full bg-amber-600 hover:bg-amber-700"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate('/admin/ratings');
+              }}
+            >
+              <Star className="w-5 h-5 mr-2" />
+              Ver Avaliações
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* ========== ACESSO RÁPIDO ========== */}
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold text-muted-foreground">Acesso Rápido</h2>
+          <div className="grid gap-3 md:grid-cols-6">
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1 border-green-500/50 hover:bg-green-500/10"
+              onClick={() => navigate('/admin/v7/play/837cc44a-fb80-4949-8fff-dbb8ba66bd1a?debug=1')}
+            >
+              <Play className="w-5 h-5 text-green-500" />
+              <span className="text-xs">V7 Play</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1"
+              onClick={() => navigate('/admin/v7/diagnostic')}
+            >
+              <Bug className="w-5 h-5 text-orange-500" />
+              <span className="text-xs">Debug Engine</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1 border-cyan-500/50 hover:bg-cyan-500/10"
+              onClick={() => navigate('/admin/c10-report')}
+            >
+              <ClipboardCheck className="w-5 h-5 text-cyan-500" />
+              <span className="text-xs">Relatório C10</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1"
+              onClick={() => navigate('/admin/pipeline/manage-lessons')}
+            >
+              <Trash2 className="w-5 h-5 text-destructive" />
+              <span className="text-xs">Gerenciar Lições</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1"
+              onClick={() => navigate('/admin/pipeline/monitor')}
+            >
+              <Activity className="w-5 h-5 text-primary" />
+              <span className="text-xs">Monitor Pipeline</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1 border-amber-500/50 hover:bg-amber-500/10"
+              onClick={() => navigate('/admin/image-lab')}
+            >
+              <ImageIcon className="w-5 h-5 text-amber-500" />
+              <span className="text-xs">Image Lab</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1 border-yellow-500/50 hover:bg-yellow-500/10"
+              onClick={() => navigate('/admin/elevenlabs-costs')}
+            >
+              <DollarSign className="w-5 h-5 text-yellow-600" />
+              <span className="text-xs">Custos ElevenLabs</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-auto py-3 flex-col gap-1"
+              onClick={copyJsonToClipboard}
+            >
+              {copied ? (
+                <CheckCircle className="w-5 h-5 text-green-500" />
+              ) : (
+                <Copy className="w-5 h-5 text-emerald-500" />
+              )}
+              <span className="text-xs">{copied ? 'Copiado!' : 'Copiar JSON'}</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* ========== PIPELINE AUTOMÁTICO (LEGADO) ========== */}
+        <Card className="border border-border/50 bg-muted/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-lg text-muted-foreground">
+              <Rocket className="w-5 h-5" />
+              Pipeline Automático
+              <span className="text-xs bg-muted px-2 py-0.5 rounded">V1/V2</span>
+            </CardTitle>
+            <CardDescription className="text-sm">
+              Sistema legado em 8 etapas para modelos V1 e V2
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/admin/pipeline')}
+            >
+              <Rocket className="w-4 h-4 mr-2" />
+              Acessar Pipeline Legado
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

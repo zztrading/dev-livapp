@@ -1,0 +1,401 @@
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { useV7SoundEffects } from '@/components/lessons/v7/cinematic/useV7SoundEffects';
+import { FlipCardQuizExerciseData } from '@/types/exerciseSchemas';
+import { Brain, Zap, Target, Lightbulb, Sparkles, RotateCcw } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { scheduleCTAScroll } from './v8/v8ScrollUtils';
+import confetti from 'canvas-confetti';
+import { ExerciseHeader } from './_shared/ExerciseHeader';
+
+const ICON_MAP: Record<string, React.ComponentType<any>> = {
+  Brain, Zap, Target, Lightbulb, Sparkles,
+};
+
+const COLOR_MAP: Record<string, { gradient: string; glow: string; border: string }> = {
+  cyan: {
+    gradient: 'from-cyan-600/80 to-cyan-800/90',
+    glow: '0 0 25px rgba(34,211,238,0.4)',
+    border: 'border-cyan-400/50',
+  },
+  emerald: {
+    gradient: 'from-emerald-600/80 to-emerald-800/90',
+    glow: '0 0 25px rgba(52,211,153,0.4)',
+    border: 'border-emerald-400/50',
+  },
+  purple: {
+    gradient: 'from-purple-600/80 to-purple-800/90',
+    glow: '0 0 25px rgba(168,85,247,0.4)',
+    border: 'border-purple-400/50',
+  },
+  amber: {
+    gradient: 'from-amber-600/80 to-amber-800/90',
+    glow: '0 0 25px rgba(251,191,36,0.4)',
+    border: 'border-amber-400/50',
+  },
+};
+
+interface FlipCardQuizExerciseProps {
+  title: string;
+  instruction: string;
+  data: FlipCardQuizExerciseData;
+  onComplete: (score: number) => void;
+  onContinue?: () => void;
+}
+
+export function FlipCardQuizExercise({ title, instruction, data, onComplete, onContinue }: FlipCardQuizExerciseProps) {
+  const isMobile = useIsMobile();
+  const { playSound } = useV7SoundEffects(0.6, true);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const feedbackActionsRef = useRef<HTMLDivElement>(null);
+
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [flippedCards, setFlippedCards] = useState<Set<number>>(new Set());
+  const [selectedOptions, setSelectedOptions] = useState<Record<number, string>>({});
+  const [answeredCards, setAnsweredCards] = useState<Set<number>>(new Set());
+  const [correctCards, setCorrectCards] = useState<Set<number>>(new Set());
+  const [showGlow, setShowGlow] = useState<number | null>(null);
+  const [shakeCard, setShakeCard] = useState<number | null>(null);
+  const [showResult, setShowResult] = useState(false);
+  const [finalScore, setFinalScore] = useState(0);
+
+  // Filter out cards with fewer than 2 options — they're broken data
+  const cards = useMemo(() => data.cards.filter(c => c.options && c.options.length >= 2), [data.cards]);
+  const totalCards = cards.length;
+  const completedCount = answeredCards.size;
+
+  const handleTryAgain = useCallback(() => {
+    setActiveIndex(0);
+    setFlippedCards(new Set());
+    setSelectedOptions({});
+    setAnsweredCards(new Set());
+    setCorrectCards(new Set());
+    setShowGlow(null);
+    setShakeCard(null);
+    setShowResult(false);
+    setFinalScore(0);
+  }, []);
+
+  const handleContinue = useCallback(() => {
+    onContinue?.();
+  }, [onContinue]);
+
+  useEffect(() => {
+    if (!showResult) return;
+    return scheduleCTAScroll(() => feedbackActionsRef.current);
+  }, [showResult]);
+
+  const flipCard = useCallback((index: number) => {
+    if (flippedCards.has(index)) return;
+    playSound('click-confirm');
+    setFlippedCards(prev => new Set(prev).add(index));
+    setShowGlow(index);
+    setTimeout(() => setShowGlow(null), 800);
+  }, [flippedCards, playSound]);
+
+  const selectOption = useCallback((cardIndex: number, optionId: string) => {
+    if (answeredCards.has(cardIndex)) return;
+    playSound('snap-success');
+    setSelectedOptions(prev => ({ ...prev, [cardIndex]: optionId }));
+  }, [answeredCards, playSound]);
+
+  const confirmAnswer = useCallback((cardIndex: number) => {
+    const card = cards[cardIndex];
+    const selectedId = selectedOptions[cardIndex];
+    if (!selectedId) return;
+
+    const isCorrect = card.options.find(o => o.id === selectedId)?.isCorrect ?? false;
+    setAnsweredCards(prev => new Set(prev).add(cardIndex));
+
+    if (isCorrect) {
+      setCorrectCards(prev => new Set(prev).add(cardIndex));
+      playSound('combo-hit');
+      setTimeout(() => playSound('quiz-correct'), 150);
+
+      // Localized confetti
+      if (cardRef.current) {
+        const rect = cardRef.current.getBoundingClientRect();
+        const x = (rect.left + rect.width / 2) / window.innerWidth;
+        const y = (rect.top + rect.height / 2) / window.innerHeight;
+        confetti({ particleCount: 40, spread: 50, origin: { x, y }, colors: ['#10b981', '#06b6d4', '#8b5cf6'] });
+      }
+
+      // Check if last card
+      const newCompleted = answeredCards.size + 1;
+      if (newCompleted === totalCards) {
+        const totalCorrect = correctCards.size + 1;
+        const score = Math.round((totalCorrect / totalCards) * 100);
+        setFinalScore(score);
+        onComplete(score);
+
+        if (score === 100) {
+          playSound('level-up');
+          setTimeout(() => playSound('completion'), 200);
+          setTimeout(() => confetti({ particleCount: 120, spread: 100, origin: { y: 0.5 } }), 300);
+        } else if (score >= 60) {
+          playSound('level-up');
+          setTimeout(() => confetti({ particleCount: 60, spread: 70, origin: { y: 0.5 } }), 300);
+        } else {
+          playSound('streak-bonus');
+        }
+        setTimeout(() => setShowResult(true), 1500);
+      } else {
+        // Auto-advance after delay
+        setTimeout(() => {
+          if (cardIndex < totalCards - 1) setActiveIndex(cardIndex + 1);
+        }, 1500);
+      }
+    } else {
+      playSound('quiz-wrong');
+      setShakeCard(cardIndex);
+      setTimeout(() => setShakeCard(null), 500);
+
+      const newCompleted = answeredCards.size + 1;
+      const totalCorrect = correctCards.size;
+      const score = Math.round((totalCorrect / totalCards) * 100);
+      setFinalScore(score);
+      if (newCompleted === totalCards) {
+        onComplete(score);
+        setTimeout(() => setShowResult(true), 1500);
+      } else {
+        // Not last card — auto-advance
+        setTimeout(() => {
+          if (cardIndex < totalCards - 1) setActiveIndex(cardIndex + 1);
+        }, 1500);
+      }
+    }
+  }, [cards, selectedOptions, answeredCards, correctCards, totalCards, playSound, onComplete]);
+
+  const colorScheme = (color?: string) => COLOR_MAP[color || 'cyan'] || COLOR_MAP.cyan;
+
+  const renderCard = (index: number, position: 'center' | 'side') => {
+    const card = cards[index];
+    if (!card) return null;
+
+    const isFlipped = flippedCards.has(index);
+    const isAnswered = answeredCards.has(index);
+    const isCorrect = correctCards.has(index);
+    const isGlowing = showGlow === index;
+    const isShaking = shakeCard === index;
+    const colors = colorScheme(card.front.color);
+    const IconComp = ICON_MAP[card.front.icon || 'Brain'] || Brain;
+
+    const scaleVal = position === 'center' ? 1.05 : 0.85;
+    const opacityVal = position === 'center' ? 1 : 0.5;
+
+    return (
+      <motion.div
+        key={card.id}
+        ref={position === 'center' ? cardRef : undefined}
+        className="relative"
+        style={{ perspective: 1200, width: isMobile ? '100%' : 280 }}
+        animate={{
+          scale: scaleVal,
+          opacity: opacityVal,
+          x: isShaking ? [-4, 4, -4, 4, 0] : 0,
+        }}
+        transition={{ duration: isShaking ? 0.4 : 0.3 }}
+      >
+        {/* Glow ring on reveal */}
+        <AnimatePresence>
+          {isGlowing && (
+            <motion.div
+              className="absolute inset-0 rounded-2xl z-0"
+              initial={{ scale: 1, opacity: 0.8 }}
+              animate={{ scale: 1.15, opacity: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.8 }}
+              style={{ boxShadow: colors.glow }}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* Correct answer ring */}
+        <AnimatePresence>
+          {isAnswered && isCorrect && (
+            <motion.div
+              className="absolute inset-0 rounded-2xl z-0 border-2 border-success/60"
+              initial={{ scale: 1, opacity: 1 }}
+              animate={{ scale: 1.3, opacity: 0 }}
+              transition={{ duration: 0.7 }}
+            />
+          )}
+        </AnimatePresence>
+
+        <div className="w-full cursor-pointer">
+          {/* FRONT — only visible when not flipped */}
+          {!isFlipped && (
+            <motion.div
+              className={`rounded-2xl bg-gradient-to-br ${colors.gradient} border border-white/10 shadow-2xl flex flex-col items-center justify-center gap-5 p-8 min-h-[340px]`}
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              onClick={() => position === 'center' && flipCard(index)}
+            >
+              <div className="w-16 h-16 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center">
+                <IconComp className="w-8 h-8 text-white/90" />
+              </div>
+              <span className="text-white/90 text-xl font-semibold tracking-wide">{card.front.label}</span>
+              <span className="text-white/50 text-sm">Toque para revelar</span>
+            </motion.div>
+          )}
+
+          {/* BACK — only visible when flipped */}
+          {isFlipped && (
+            <motion.div
+              className={`rounded-2xl bg-card border ${isAnswered ? (isCorrect ? 'border-success/50' : 'border-destructive/50') : isGlowing ? 'border-primary/40' : 'border-border/60'} shadow-lg flex flex-col justify-between p-5 min-h-[340px]`}
+              initial={{ opacity: 0, rotateY: -90 }}
+              animate={{ opacity: 1, rotateY: 0 }}
+              transition={{ duration: 0.4 }}
+              style={{
+                boxShadow: isGlowing ? '0 0 25px hsl(var(--primary) / 0.2)' : isAnswered && isCorrect ? '0 0 20px hsl(var(--success) / 0.18)' : 'none',
+              }}
+            >
+              <p className="text-foreground text-base font-medium mb-4 leading-relaxed">{card.back.text}</p>
+
+              <div className="flex flex-col gap-2.5">
+                {card.options.map((opt, oi) => {
+                  const isSelected = selectedOptions[index] === opt.id;
+                  const showResult = isAnswered;
+                  const optCorrect = opt.isCorrect;
+
+                  return (
+                    <motion.button
+                      key={opt.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.08 * oi + 0.2 }}
+                      disabled={isAnswered}
+                      onClick={(e) => { e.stopPropagation(); selectOption(index, opt.id); }}
+                      className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 border ${
+                        showResult && optCorrect
+                          ? 'bg-success/[0.06] border-success/50 text-success'
+                          : showResult && isSelected && !optCorrect
+                            ? 'bg-destructive/[0.06] border-destructive/50 text-destructive'
+                            : isSelected
+                              ? 'bg-primary/[0.06] border-primary/40 text-primary'
+                              : 'bg-card border-border/60 text-foreground hover:border-primary/30 hover:bg-muted/40'
+                      }`}
+                    >
+                      <span className="line-clamp-2">{opt.text}</span>
+                    </motion.button>
+                  );
+                })}
+              </div>
+
+              {/* Confirm button */}
+              {!isAnswered && selectedOptions[index] && position === 'center' && (
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  onClick={(e) => { e.stopPropagation(); confirmAnswer(index); }}
+                  className="mt-3 w-full py-2.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-primary-foreground font-bold text-sm shadow-lg hover:shadow-primary/25 transition-shadow"
+                >
+                  Confirmar
+                </motion.button>
+              )}
+
+              {/* Explanation after answer */}
+              {isAnswered && card.explanation && (
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.3 }}
+                  className="mt-2 text-xs text-muted-foreground italic leading-relaxed"
+                >
+                  {card.explanation}
+                </motion.p>
+              )}
+            </motion.div>
+          )}
+        </div>
+      </motion.div>
+    );
+  };
+
+  // If all cards were filtered out (broken data), auto-complete with full score
+  if (totalCards === 0) {
+    return (
+      <div className="w-full max-w-4xl mx-auto py-6 px-4 text-center">
+        <p className="text-muted-foreground text-sm">Exercício indisponível</p>
+        {onContinue && (
+          <Button onClick={() => { onComplete(100); onContinue(); }} className="mt-4">
+            Continuar
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-4xl mx-auto py-6 px-4">
+      {/* Header */}
+      <div className="mb-8 max-w-3xl mx-auto">
+        <ExerciseHeader question={title} instruction={instruction} />
+        <div className="mt-4 max-w-xs">
+          <Progress value={(completedCount / totalCards) * 100} className="h-2" />
+          <p className="text-xs text-muted-foreground mt-1">{completedCount} / {totalCards}</p>
+        </div>
+      </div>
+
+      {/* Cards area */}
+      <div className="flex items-start justify-center gap-4">
+        {isMobile ? (
+          /* Mobile: single card */
+          <div className="w-full max-w-[320px]">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeIndex}
+                initial={{ opacity: 0, x: 50 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -50 }}
+                transition={{ duration: 0.3 }}
+              >
+                {renderCard(activeIndex, 'center')}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        ) : (
+          /* Desktop: 3 cards */
+          <>
+            <div className="transition-all duration-300">
+              {activeIndex > 0 ? renderCard(activeIndex - 1, 'side') : <div style={{ width: 280 }} />}
+            </div>
+            <div className="z-10">
+              {renderCard(activeIndex, 'center')}
+            </div>
+            <div className="transition-all duration-300">
+              {activeIndex < totalCards - 1 ? renderCard(activeIndex + 1, 'side') : <div style={{ width: 280 }} />}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Result feedback: score + Flow A/B buttons */}
+      {showResult && (
+        <motion.div
+          ref={feedbackActionsRef}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-6 space-y-3"
+        >
+          {/* Score badge */}
+          <div className={`flex items-center gap-2 p-4 rounded-xl border ${
+            finalScore === 100
+              ? "border-success/30 bg-success/[0.06]"
+              : "border-accent/30 bg-accent/[0.06]"
+          }`}>
+            <CheckCircle2 className={`w-5 h-5 ${finalScore === 100 ? "text-success" : "text-accent"}`} />
+            <span className={`text-sm font-semibold ${finalScore === 100 ? "text-success" : "text-accent"}`}>
+              {correctCards.size}/{totalCards} acertos!
+            </span>
+          </div>
+
+          {/* NO internal buttons — parent V8InlineExercise owns navigation */}
+        </motion.div>
+      )}
+    </div>
+  );
+}

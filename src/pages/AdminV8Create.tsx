@@ -1,0 +1,1963 @@
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { ArrowLeft, Check, AlertTriangle, Loader2, Play, Pause, Upload, Save, Zap, FileText, Code, Sparkles, Wand2 } from "lucide-react";
+import { motion } from "framer-motion";
+import { V8LessonData, V8Section, V8InlineQuiz, V8InlinePlayground } from "@/types/v8Lesson";
+import { Json } from "@/integrations/supabase/types";
+import { V7PipelineMonitor, PipelineStep, PipelineLog } from "@/components/admin/V7PipelineMonitor";
+import { parseFullContent, ParseResult } from "@/lib/v8ContentParser";
+import { V8SectionSetup } from "@/components/admin/V8SectionSetup";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import V8MediaUploader from "@/components/admin/V8MediaUploader";
+import { validateV8Json } from "@/lib/v8/validateV8Json";
+import { requestSectionAudio as requestSectionAudioImpl } from "@/lib/v8/requestSectionAudio";
+import { AUDIO_RETRY_DELAYS_MS } from "@/lib/v8/types";
+import type { AudioResult, GenerateResponse, AudioFailure, ValidationResult } from "@/lib/v8/types";
+
+// ─── Types locais ao componente ───
+type Step = "edit" | "setup" | "validate" | "generate" | "preview" | "saved";
+
+
+// ─── Default JSON Template ───
+const DEFAULT_JSON: V8LessonData = {
+  contentVersion: "v8",
+  title: "Nova Aula V8",
+  description: "Descrição da aula",
+  sections: [
+    {
+      id: "section-01",
+      title: "Introdução",
+      content: "## Bem-vindo\n\nEste é o conteúdo da primeira seção em **markdown**.",
+      audioUrl: "",
+    },
+  ],
+  inlineQuizzes: [],
+  inlinePlaygrounds: [],
+  exercises: [],
+};
+
+// ─── Default V8 Pipeline Steps ───
+const DEFAULT_V8_PIPELINE_STEPS: PipelineStep[] = [
+  { id: 'validate', name: 'Validando JSON de entrada', status: 'pending' },
+  { id: 'create-draft', name: 'Criando rascunho no banco', status: 'pending' },
+  { id: 'call-api', name: 'Conectando com ElevenLabs', status: 'pending' },
+  { id: 'process-results', name: 'Processando áudios gerados', status: 'pending' },
+  { id: 'update-content', name: 'Atualizando conteúdo com URLs de áudio', status: 'pending' },
+  { id: 'finalize', name: 'Finalizando', status: 'pending' },
+];
+
+// ─── Component ───
+export default function AdminV8Create() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
+  // Trail & Course selectors
+  interface TrailOption { id: string; title: string; trail_type: string | null }
+  interface CourseOption { id: string; trail_id: string; title: string }
+  const [trails, setTrails] = useState<TrailOption[]>([]);
+  const [allCourses, setAllCourses] = useState<CourseOption[]>([]);
+  const [selectedTrailId, setSelectedTrailId] = useState<string>('');
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+
+  useEffect(() => {
+    (async () => {
+      const [t, c] = await Promise.all([
+        supabase.from('trails').select('id, title, trail_type').eq('is_active', true).order('order_index'),
+        supabase.from('courses').select('id, trail_id, title').order('order_index'),
+      ]);
+      if (t.data) setTrails(t.data);
+      if (c.data) setAllCourses(c.data);
+    })();
+  }, []);
+
+  const coursesForTrail = useMemo(() => allCourses.filter(c => c.trail_id === selectedTrailId), [allCourses, selectedTrailId]);
+
+  // Auto-calculate next available order_index for a trail
+  const getNextOrderIndexForTrail = useCallback(async (trailId: string | null): Promise<number> => {
+    if (!trailId) return 0;
+
+    const { data, error } = await supabase
+      .from('lessons')
+      .select('order_index')
+      .eq('trail_id', trailId)
+      .order('order_index', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data?.order_index ?? -1) + 1;
+  }, []);
+
+  const getNextOrderIndex = useCallback(async (): Promise<number> => {
+    return getNextOrderIndexForTrail(selectedTrailId || null);
+  }, [getNextOrderIndexForTrail, selectedTrailId]);
+
+  // State
+  const [lessonTitle, setLessonTitle] = useState("Nova Aula V8");
+  const [estimatedTime, setEstimatedTime] = useState(10);
+  const [jsonText, setJsonText] = useState(JSON.stringify(DEFAULT_JSON, null, 2));
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [step, setStep] = useState<Step>("edit");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isRetryingFailedAudios, setIsRetryingFailedAudios] = useState(false);
+  const [savedLessonId, setSavedLessonId] = useState<string | null>(null);
+  const [playingAudioUrl, setPlayingAudioUrl] = useState<string | null>(null);
+  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+
+  // Content mode
+  const [editorMode, setEditorMode] = useState<"content" | "json">("content");
+  const [contentText, setContentText] = useState("");
+
+  // AI Generation state
+  const [genTitle, setGenTitle] = useState("");
+  const [genObjectives, setGenObjectives] = useState("");
+  const [genVariation, setGenVariation] = useState<"everyday" | "professional" | "curiosity">("everyday");
+  const [isGeneratingContent, setIsGeneratingContent] = useState(false);
+
+  // Pattern selector state
+  type PatternId = 'V8-C01' | 'V8-B01' | 'V8-C02' | 'V8-B02' | 'V8-C03' | 'V8-B03';
+  const [selectedPatternOverride, setSelectedPatternOverride] = useState<PatternId | 'auto'>('auto');
+
+  const PATTERN_META: Record<PatternId, { label: string; sections: number; angle: string; color: string }> = {
+    'V8-C01': { label: 'C01', sections: 9, angle: 'Cotidiano', color: 'indigo' },
+    'V8-C02': { label: 'C02', sections: 9, angle: 'Profissional', color: 'blue' },
+    'V8-C03': { label: 'C03', sections: 9, angle: 'Curiosidade', color: 'cyan' },
+    'V8-B01': { label: 'B01', sections: 7, angle: 'Comparação', color: 'amber' },
+    'V8-B02': { label: 'B02', sections: 7, angle: 'Debate', color: 'orange' },
+    'V8-B03': { label: 'B03', sections: 7, angle: 'Provocação', color: 'rose' },
+  };
+
+  const resolvePattern = useCallback((orderIdx: number): PatternId => {
+    if (selectedPatternOverride !== 'auto') return selectedPatternOverride;
+    const rotation: PatternId[] = ['V8-C01', 'V8-B01', 'V8-C02', 'V8-B02', 'V8-C03', 'V8-B03'];
+    return rotation[orderIdx % 6];
+  }, [selectedPatternOverride]);
+
+  // Sync pattern → narrative variation
+  const PATTERN_VARIATION_MAP: Record<PatternId, "everyday" | "professional" | "curiosity"> = {
+    'V8-C01': 'everyday',
+    'V8-C02': 'professional',
+    'V8-C03': 'curiosity',
+    'V8-B01': 'everyday',
+    'V8-B02': 'everyday',
+    'V8-B03': 'everyday',
+  };
+
+  useEffect(() => {
+    if (selectedPatternOverride === 'auto') return;
+    setGenVariation(PATTERN_VARIATION_MAP[selectedPatternOverride]);
+  }, [selectedPatternOverride]);
+
+  // Model 2 — Editor de Variações
+  const [genModel, setGenModel] = useState<"model1" | "model2">("model1");
+  const [genBaseText, setGenBaseText] = useState("");
+  const [genAnchors, setGenAnchors] = useState("");
+  const [generatedVariations, setGeneratedVariations] = useState<Array<{ lever: string; leverName: string; title: string; description: string; sections: Array<{ title: string; content: string }>; anchorChecklist?: Record<string, boolean> }>>([]);
+  const [isGeneratingVariations, setIsGeneratingVariations] = useState(false);
+  const [selectedVariationLever, setSelectedVariationLever] = useState<string | null>(null);
+  // Parsed data for setup wizard
+  const [parsedSections, setParsedSections] = useState<V8Section[]>([]);
+  const [parsedQuizzes, setParsedQuizzes] = useState<V8InlineQuiz[]>([]);
+  const [parsedPlaygrounds, setParsedPlaygrounds] = useState<V8InlinePlayground[]>([]);
+
+  // Pipeline monitor state
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([]);
+  const [pipelineLogs, setPipelineLogs] = useState<PipelineLog[]>([]);
+  const [pipelineProgress, setPipelineProgress] = useState(0);
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
+
+  // Pipeline helpers
+  const updateStep = useCallback((id: string, status: PipelineStep['status'], message?: string) => {
+    setPipelineSteps(prev => prev.map(s => s.id === id ? { ...s, status, message } : s));
+  }, []);
+
+  const addLog = useCallback((level: PipelineLog['level'], message: string) => {
+    setPipelineLogs(prev => [...prev, { timestamp: new Date(), level, message }]);
+  }, []);
+
+  const resetPipeline = useCallback(() => {
+    setPipelineSteps(DEFAULT_V8_PIPELINE_STEPS.map(s => ({ ...s })));
+    setPipelineLogs([]);
+    setPipelineProgress(0);
+    setPipelineError(null);
+  }, []);
+
+  const getAudioItemLabel = useCallback((type: string, index: number) => {
+    switch (type) {
+      case 'section':
+        return `Seção ${index + 1}`;
+      case 'quiz':
+        return `Quiz ${index + 1}`;
+      case 'quiz-reinforcement':
+        return `Quiz ${index + 1} (reforço)`;
+      case 'quiz-explanation':
+        return `Quiz ${index + 1} (explicação)`;
+      case 'playground':
+        return `Playground ${index + 1}`;
+      case 'playground-success':
+        return `Playground ${index + 1} (sucesso)`;
+      case 'playground-tryagain':
+        return `Playground ${index + 1} (tente novamente)`;
+      default:
+        return `${type} ${index}`;
+    }
+  }, []);
+
+  // Wrapper estável via useCallback. Lógica pura em @/lib/v8/requestSectionAudio.
+  const requestSectionAudio = useCallback(requestSectionAudioImpl, []);
+
+  const resolveAudioSource = useCallback((data: V8LessonData, failure: Pick<AudioFailure, 'type' | 'index'>) => {
+    switch (failure.type) {
+      case 'section': {
+        const section = data.sections[failure.index];
+        if (!section) return null;
+        return {
+          text: section.content || '',
+          previousText: failure.index > 0 ? data.sections[failure.index - 1]?.content : undefined,
+          nextText: failure.index < data.sections.length - 1 ? data.sections[failure.index + 1]?.content : undefined,
+        };
+      }
+      case 'quiz': {
+        const quiz = data.inlineQuizzes?.[failure.index] as (V8InlineQuiz & { statement?: string; sentenceWithBlank?: string }) | undefined;
+        if (!quiz) return null;
+        return { text: quiz.question || quiz.statement || quiz.sentenceWithBlank || '' };
+      }
+      case 'quiz-reinforcement':
+        return { text: data.inlineQuizzes?.[failure.index]?.reinforcement || '' };
+      case 'quiz-explanation':
+        return { text: data.inlineQuizzes?.[failure.index]?.explanation || '' };
+      case 'playground':
+        return { text: data.inlinePlaygrounds?.[failure.index]?.narration || '' };
+      case 'playground-success':
+        return { text: data.inlinePlaygrounds?.[failure.index]?.successMessage || '' };
+      case 'playground-tryagain':
+        return { text: data.inlinePlaygrounds?.[failure.index]?.tryAgainMessage || '' };
+      default:
+        return null;
+    }
+  }, []);
+
+  const applyAudioResultToContent = useCallback((data: V8LessonData, result: AudioResult, cacheBuster: string) => {
+    switch (result.type) {
+      case 'section':
+        if (data.sections[result.index]) {
+          data.sections[result.index].audioUrl = result.audioUrl + cacheBuster;
+          data.sections[result.index].audioDurationSeconds = result.durationEstimate;
+        }
+        break;
+      case 'quiz':
+        if (data.inlineQuizzes?.[result.index]) data.inlineQuizzes[result.index].audioUrl = result.audioUrl + cacheBuster;
+        break;
+      case 'quiz-reinforcement':
+        if (data.inlineQuizzes?.[result.index]) data.inlineQuizzes[result.index].reinforcementAudioUrl = result.audioUrl + cacheBuster;
+        break;
+      case 'quiz-explanation':
+        if (data.inlineQuizzes?.[result.index]) data.inlineQuizzes[result.index].explanationAudioUrl = result.audioUrl + cacheBuster;
+        break;
+      case 'playground':
+        if (data.inlinePlaygrounds?.[result.index]) data.inlinePlaygrounds[result.index].audioUrl = result.audioUrl + cacheBuster;
+        break;
+      case 'playground-success':
+        if (data.inlinePlaygrounds?.[result.index]) data.inlinePlaygrounds[result.index].successAudioUrl = result.audioUrl + cacheBuster;
+        break;
+      case 'playground-tryagain':
+        if (data.inlinePlaygrounds?.[result.index]) data.inlinePlaygrounds[result.index].tryAgainAudioUrl = result.audioUrl + cacheBuster;
+        break;
+    }
+  }, []);
+
+  const createDraftWithRetry = useCallback(async ({
+    title,
+    estimatedMinutes,
+    content,
+    exercises,
+  }: {
+    title: string;
+    estimatedMinutes: number;
+    content: Json;
+    exercises: Json;
+  }): Promise<string> => {
+    const targetTrailId = selectedTrailId || null;
+    const targetCourseId = targetTrailId ? selectedCourseId || null : null;
+
+    let nextOrderIndex = await getNextOrderIndexForTrail(targetTrailId);
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data: draftId, error: draftError } = await supabase.rpc("create_lesson_draft", {
+        p_title: title,
+        p_trail_id: targetTrailId as unknown as string,
+        p_order_index: nextOrderIndex,
+        p_estimated_time: estimatedMinutes,
+        p_content: content,
+        p_exercises: exercises,
+        p_audio_url: null as unknown as string,
+        p_word_timestamps: null as unknown as Json,
+        p_model: "v8",
+      });
+
+      if (!draftError) {
+        if (targetCourseId) {
+          const { error: courseError } = await supabase
+            .from("lessons")
+            .update({ course_id: targetCourseId })
+            .eq("id", draftId);
+
+          if (courseError) throw courseError;
+        }
+
+        return draftId;
+      }
+
+      if (draftError.code === '23505') {
+        nextOrderIndex++;
+        lastError = draftError;
+        continue;
+      }
+
+      throw draftError;
+    }
+
+    throw lastError || new Error('Falha ao criar rascunho após 5 tentativas');
+  }, [getNextOrderIndexForTrail, selectedCourseId, selectedTrailId]);
+
+  const updateLessonWithHierarchyRetry = useCallback(async (
+    lessonId: string,
+    baseUpdates: Record<string, unknown>
+  ): Promise<void> => {
+    const targetTrailId = selectedTrailId || null;
+    const targetCourseId = targetTrailId ? selectedCourseId || null : null;
+
+    const { data: existingLesson, error: existingError } = await supabase
+      .from("lessons")
+      .select("trail_id, order_index")
+      .eq("id", lessonId)
+      .single();
+
+    if (existingError) throw existingError;
+
+    const isMovingTrail = existingLesson.trail_id !== targetTrailId;
+    let nextOrderIndex = existingLesson.order_index ?? 0;
+
+    if (isMovingTrail && targetTrailId) {
+      nextOrderIndex = await getNextOrderIndexForTrail(targetTrailId);
+    }
+
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const updatePayload = {
+        ...baseUpdates,
+        trail_id: targetTrailId,
+        course_id: targetCourseId,
+        ...(isMovingTrail && targetTrailId ? { order_index: nextOrderIndex } : {}),
+      };
+
+      const { error } = await supabase
+        .from("lessons")
+        .update(updatePayload as any)
+        .eq("id", lessonId);
+
+      if (!error) return;
+
+      if (error.code === '23505' && targetTrailId) {
+        nextOrderIndex++;
+        lastError = error;
+        continue;
+      }
+
+      throw error;
+    }
+
+    throw lastError || new Error('Falha ao atualizar aula após 5 tentativas');
+  }, [getNextOrderIndexForTrail, selectedCourseId, selectedTrailId]);
+
+  // ─── Handlers ───
+  const handleValidate = useCallback(() => {
+    try {
+      const parsed = JSON.parse(jsonText);
+      const result = validateV8Json(parsed);
+      setValidation(result);
+      if (result.valid) {
+        setLessonTitle(parsed.title || lessonTitle);
+        setStep("validate");
+        toast({ title: "✅ JSON válido", description: `${result.sectionCount} seções, ${result.quizCount} quizzes, ${result.playgroundCount} playgrounds, ${result.exerciseCount} exercícios` });
+      } else {
+        toast({ title: "❌ Erros encontrados", description: result.errors.join("; "), variant: "destructive" });
+      }
+    } catch (e) {
+      setValidation({ valid: false, sectionCount: 0, quizCount: 0, playgroundCount: 0, exerciseCount: 0, warnings: [], errors: ["JSON parse error: " + (e as Error).message] });
+      toast({ title: "❌ JSON inválido", description: (e as Error).message, variant: "destructive" });
+    }
+  }, [jsonText, lessonTitle, toast]);
+
+  const handleGenerateAudio = useCallback(async () => {
+    if (!validation?.valid) return;
+
+    setIsGenerating(true);
+    setStep("generate");
+    resetPipeline();
+
+    try {
+      // Step 1: Validate
+      updateStep('validate', 'running');
+      addLog('info', 'Validando JSON de entrada...');
+      const parsed: V8LessonData = JSON.parse(jsonText);
+      updateStep('validate', 'completed', `${parsed.sections.length} seções`);
+      addLog('success', `JSON válido: ${parsed.sections.length} seções, ${parsed.inlineQuizzes?.length || 0} quizzes`);
+      setPipelineProgress(10);
+
+      // Step 2: Create draft
+      updateStep('create-draft', 'running');
+      addLog('info', 'Criando rascunho no banco de dados...');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      let lessonId = savedLessonId;
+      if (!lessonId) {
+        lessonId = await createDraftWithRetry({
+          title: lessonTitle,
+          estimatedMinutes: estimatedTime,
+          content: parsed as unknown as Json,
+          exercises: [] as unknown as Json,
+        });
+        setSavedLessonId(lessonId);
+      }
+      updateStep('create-draft', 'completed', `ID: ${lessonId?.slice(0, 8)}...`);
+      addLog('success', `Rascunho criado: ${lessonId}`);
+      setPipelineProgress(25);
+
+      // Step 3: Generate audio per section
+      updateStep('call-api', 'running');
+      addLog('info', 'Gerando áudios via ElevenLabs (por seção)...');
+
+      const audioResults: AudioResult[] = [];
+      const audioErrors: Array<{ index: number; type: string; error: string }> = [];
+      let totalSizeKB = 0;
+      const audioStartTime = Date.now();
+      const cacheBuster = `?t=${Date.now()}`;
+
+      const generateOneAudio = (type: string, index: number, text: string, previousText?: string, nextText?: string) =>
+        requestSectionAudio({
+          lessonId: lessonId!,
+          accessToken: session.access_token,
+          type,
+          index,
+          text,
+          previousText,
+          nextText,
+          onRetry: (attempt, delayMs, reason) => addLog('warning', `Retry ${getAudioItemLabel(type, index)} ${attempt}/${AUDIO_RETRY_DELAYS_MS.length} em ${delayMs / 1000}s: ${reason}`),
+        });
+
+      const updatedData = { ...parsed };
+
+      for (let i = 0; i < updatedData.sections.length; i++) {
+        addLog('info', `Áudio seção ${i + 1}/${updatedData.sections.length}...`);
+        setPipelineProgress(25 + Math.round((i / updatedData.sections.length) * 50));
+        try {
+          const prevText = i > 0 ? updatedData.sections[i - 1].content : undefined;
+          const nextText = i < updatedData.sections.length - 1 ? updatedData.sections[i + 1].content : undefined;
+          const result = await generateOneAudio('section', i, updatedData.sections[i].content || '', prevText, nextText);
+          if (result) {
+            audioResults.push(result);
+            totalSizeKB += result.sizeKB;
+            updatedData.sections[i].audioUrl = result.audioUrl + cacheBuster;
+            updatedData.sections[i].audioDurationSeconds = result.durationEstimate;
+            addLog('success', `Seção ${i + 1} ✓ (${result.sizeKB}KB)`);
+          }
+        } catch (err) {
+          audioErrors.push({ index: i, type: 'section', error: err instanceof Error ? err.message : String(err) });
+          addLog('warning', `Seção ${i + 1} falhou: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // Quizzes
+      for (let i = 0; i < (updatedData.inlineQuizzes || []).length; i++) {
+        const quiz = updatedData.inlineQuizzes[i];
+        try {
+          const qr = await generateOneAudio('quiz', i, quiz.question || '');
+          if (qr) { audioResults.push(qr); totalSizeKB += qr.sizeKB; updatedData.inlineQuizzes[i].audioUrl = qr.audioUrl + cacheBuster; }
+        } catch (err) { audioErrors.push({ index: i, type: 'quiz', error: err instanceof Error ? err.message : String(err) }); }
+        if (quiz.reinforcement?.trim()) {
+          try {
+            const rr = await generateOneAudio('quiz-reinforcement', i, quiz.reinforcement);
+            if (rr) { audioResults.push(rr); totalSizeKB += rr.sizeKB; updatedData.inlineQuizzes[i].reinforcementAudioUrl = rr.audioUrl + cacheBuster; }
+          } catch (err) { audioErrors.push({ index: i, type: 'quiz-reinforcement', error: err instanceof Error ? err.message : String(err) }); }
+        }
+        if (quiz.explanation?.trim()) {
+          try {
+            const er = await generateOneAudio('quiz-explanation', i, quiz.explanation);
+            if (er) { audioResults.push(er); totalSizeKB += er.sizeKB; updatedData.inlineQuizzes[i].explanationAudioUrl = er.audioUrl + cacheBuster; }
+          } catch (err) { audioErrors.push({ index: i, type: 'quiz-explanation', error: err instanceof Error ? err.message : String(err) }); }
+        }
+      }
+
+      // Playgrounds
+      for (let i = 0; i < (updatedData.inlinePlaygrounds || []).length; i++) {
+        const pg = updatedData.inlinePlaygrounds![i];
+        for (const pf of [
+          { type: 'playground', field: 'audioUrl', text: pg.narration },
+          { type: 'playground-success', field: 'successAudioUrl', text: pg.successMessage },
+          { type: 'playground-tryagain', field: 'tryAgainAudioUrl', text: pg.tryAgainMessage },
+        ] as const) {
+          if (pf.text?.trim()) {
+            try {
+              const pr = await generateOneAudio(pf.type, i, pf.text);
+              if (pr) { audioResults.push(pr); totalSizeKB += pr.sizeKB; (updatedData.inlinePlaygrounds![i] as any)[pf.field] = pr.audioUrl + cacheBuster; }
+            } catch (err) { audioErrors.push({ index: i, type: pf.type, error: err instanceof Error ? err.message : String(err) }); }
+          }
+        }
+      }
+
+      const audioElapsed = Date.now() - audioStartTime;
+
+      updateStep('call-api', 'completed');
+      setPipelineProgress(80);
+
+      // Step 4: Process results
+      updateStep('process-results', 'running');
+      const genResult: GenerateResponse = {
+        success: audioErrors.length === 0,
+        lessonId: lessonId!,
+        results: audioResults,
+        errors: audioErrors.length > 0 ? audioErrors : undefined,
+        stats: { totalAudios: audioResults.length, totalErrors: audioErrors.length, totalSizeKB: totalSizeKB, elapsedMs: audioElapsed },
+      };
+      setGenerateResult(genResult);
+      updateStep('process-results', 'completed', `${audioResults.length} áudios`);
+      addLog('success', `${audioResults.length} áudios gerados (${totalSizeKB}KB)`);
+      if (audioErrors.length > 0) {
+        audioErrors.forEach(e => addLog('warning', `Erro em ${e.type} ${e.index}: ${e.error}`));
+      }
+
+      // Step 5: Update content
+      updateStep('update-content', 'running');
+      setJsonText(JSON.stringify(updatedData, null, 2));
+      updateStep('update-content', 'completed');
+      addLog('success', 'Conteúdo atualizado com URLs de áudio');
+      setPipelineProgress(95);
+
+      // Step 6: Finalize
+      updateStep('finalize', 'running');
+      setStep("preview");
+      updateStep('finalize', 'completed');
+      addLog('success', `Pipeline concluído em ${(audioElapsed / 1000).toFixed(1)}s`);
+      setPipelineProgress(100);
+
+      toast({
+        title: genResult.success ? "✅ Áudios gerados!" : "⚠️ Gerado com erros",
+        description: `${audioResults.length} áudios (${totalSizeKB}KB) em ${(audioElapsed / 1000).toFixed(1)}s`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 
+                  typeof err === 'object' && err !== null ? JSON.stringify(err) : String(err);
+      
+      setPipelineSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error' as const } : s));
+      setPipelineError(msg);
+      addLog('error', msg);
+      
+      toast({ title: "❌ Erro na geração", description: msg, variant: "destructive" });
+      setStep("validate");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [validation, jsonText, lessonTitle, estimatedTime, savedLessonId, toast, resetPipeline, updateStep, addLog, createDraftWithRetry, getAudioItemLabel, requestSectionAudio]);
+
+  const handleSave = useCallback(async (activate: boolean) => {
+    setIsSaving(true);
+    try {
+      const parsed: V8LessonData = JSON.parse(jsonText);
+
+      if (savedLessonId) {
+        await updateLessonWithHierarchyRetry(savedLessonId, {
+          title: lessonTitle,
+          content: parsed as unknown as Json,
+          exercises: (parsed.exercises || []) as unknown as Json,
+          estimated_time: estimatedTime,
+          model: "v8",
+          lesson_type: "guided",
+          is_active: activate,
+          status: activate ? "publicado" : "rascunho",
+        });
+      } else {
+        const draftId = await createDraftWithRetry({
+          title: lessonTitle,
+          estimatedMinutes: estimatedTime,
+          content: parsed as unknown as Json,
+          exercises: (parsed.exercises || []) as unknown as Json,
+        });
+        setSavedLessonId(draftId);
+
+        if (activate) {
+          await updateLessonWithHierarchyRetry(draftId, {
+            is_active: true,
+            status: "publicado",
+          });
+        }
+      }
+
+      setStep("saved");
+      toast({
+        title: activate ? "✅ Aula publicada!" : "💾 Rascunho salvo",
+        description: activate ? "A aula está ativa e visível para os alunos." : "Salvo como rascunho.",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 
+                  typeof err === 'object' && err !== null ? JSON.stringify(err) : String(err);
+      toast({ title: "❌ Erro ao salvar", description: msg, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [jsonText, savedLessonId, lessonTitle, estimatedTime, toast, createDraftWithRetry, updateLessonWithHierarchyRetry]);
+
+  const handleConvertContent = useCallback(() => {
+    if (!contentText.trim()) {
+      toast({ title: "❌ Conteúdo vazio", description: "Cole o conteúdo bruto no editor.", variant: "destructive" });
+      return;
+    }
+    try {
+      const data = parseFullContent(contentText);
+      setParsedSections(data.sections);
+      setParsedQuizzes(data.inlineQuizzes);
+      setParsedPlaygrounds(data.inlinePlaygrounds || []);
+      setLessonTitle(data.title);
+      setStep("setup");
+      toast({
+        title: "✅ Conteúdo convertido!",
+        description: `${data.sections.length} seções detectadas — configure o setup`,
+      });
+    } catch (e) {
+      toast({ title: "❌ Erro na conversão", description: (e as Error).message, variant: "destructive" });
+    }
+  }, [contentText, toast]);
+
+  // ─── AI Content Generation ───
+  const sectionsToMarkdown = useCallback((title: string, description: string, sections: Array<{ title: string; content: string }>) => {
+    let md = `# ${title}\n\n${description || ""}\n\n`;
+    sections.forEach((s, i) => {
+      md += `## Seção ${i + 1} — ${s.title}\n${s.content}\n\n`;
+    });
+    return md.trim();
+  }, []);
+
+  const handleGenerateWithAI = useCallback(async () => {
+    const titleToUse = genTitle.trim() || lessonTitle;
+    if (!titleToUse) {
+      toast({ title: "❌ Tema obrigatório", description: "Preencha o tema da aula para gerar.", variant: "destructive" });
+      return;
+    }
+
+    setIsGeneratingContent(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const objectives = genObjectives.split("\n").map(l => l.trim()).filter(Boolean);
+
+      // Pre-calculate pattern to determine structure variant
+      let preOrderIndex = 0;
+      if (selectedCourseId) {
+        const { count } = await supabase
+          .from("lessons")
+          .select("id", { count: "exact", head: true })
+          .eq("course_id", selectedCourseId);
+        preOrderIndex = count ?? 0;
+      }
+      const preSelectedPattern = resolvePattern(preOrderIndex);
+      const preIsCompact = preSelectedPattern.startsWith('V8-B');
+      const meta = PATTERN_META[preSelectedPattern];
+      addLog('info', `Pattern: ${preSelectedPattern} (${meta.angle}, ${meta.sections} seções)`);
+
+      const { data, error: invokeError } = await supabase.functions.invoke('v8-generate-raw-content', {
+        body: {
+          title: titleToUse,
+          objectives,
+          variationStyle: genVariation,
+          structureVariant: preIsCompact ? "compact" : "standard",
+        },
+      });
+
+      if (invokeError) {
+        throw new Error(invokeError.message || 'v8-generate-raw-content failed');
+      }
+
+      const markdown = sectionsToMarkdown(data.title, data.description, data.sections);
+      setContentText(markdown);
+      setLessonTitle(data.title);
+
+      toast({
+        title: "✅ Conteúdo gerado!",
+        description: `${data.sections.length} seções (variação: ${genVariation}). Revise e clique "Converter e Gerar Tudo".`,
+      });
+    } catch (err) {
+      toast({
+        title: "❌ Erro na geração",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingContent(false);
+    }
+  }, [genTitle, genObjectives, genVariation, lessonTitle, toast, sectionsToMarkdown, selectedCourseId, addLog]);
+
+  // ─── Model 2: Generate Variations ───
+  const handleGenerateVariations = useCallback(async () => {
+    if (!genBaseText.trim() || genBaseText.trim().length < 20) {
+      toast({ title: "❌ Texto base obrigatório", description: "Cole o texto base (mín. 20 caracteres).", variant: "destructive" });
+      return;
+    }
+
+    setIsGeneratingVariations(true);
+    setGeneratedVariations([]);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const anchors = genAnchors.split("\n").map(l => l.trim()).filter(Boolean);
+
+      const { data, error: invokeError } = await supabase.functions.invoke('v8-generate-variations', {
+        body: { baseText: genBaseText, anchors },
+      });
+
+      if (invokeError) {
+        throw new Error(invokeError.message || 'v8-generate-variations failed');
+      }
+
+      setGeneratedVariations(data.variations || []);
+
+      toast({
+        title: "✅ 3 Variações geradas!",
+        description: `Alavancas: ${(data.leversUsed || []).join(", ")}. Escolha uma abaixo.`,
+      });
+    } catch (err) {
+      toast({
+        title: "❌ Erro na geração de variações",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingVariations(false);
+    }
+  }, [genBaseText, genAnchors, toast]);
+
+  const handleUseVariation = useCallback((variation: { lever: string; leverName: string; title: string; description: string; sections: Array<{ title: string; content: string }> }) => {
+    const markdown = sectionsToMarkdown(variation.title, variation.description, variation.sections);
+    setContentText(markdown);
+    setLessonTitle(variation.title);
+    setSelectedVariationLever(variation.lever);
+    setGeneratedVariations([]);
+    toast({
+      title: `✅ Variação ${variation.lever} (${variation.leverName}) aplicada`,
+      description: `Lição completa com ${variation.sections.length} seções carregada no editor.`,
+    });
+  }, [toast, sectionsToMarkdown]);
+
+  // ─── Convert & Generate All (new automated flow) ───
+  const handleConvertAndGenerate = useCallback(async () => {
+    if (!contentText.trim()) {
+      toast({ title: "❌ Conteúdo vazio", description: "Cole o conteúdo bruto no editor.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      // Step 1: Parse content
+      const parsed = parseFullContent(contentText);
+      setParsedSections(parsed.sections);
+      setParsedQuizzes(parsed.inlineQuizzes);
+      setParsedPlaygrounds(parsed.inlinePlaygrounds || []);
+      setLessonTitle(parsed.title);
+
+      setIsGenerating(true);
+      setStep("generate");
+      resetPipeline();
+
+      // Custom pipeline steps for automated generation
+      const autoSteps: PipelineStep[] = [
+        { id: 'parse', name: 'Parsing conteúdo bruto', status: 'completed', message: `${parsed.sections.length} seções` },
+        { id: 'refine', name: 'Refinando conteúdo didático via IA', status: 'pending' },
+        { id: 'ai-generate', name: 'IA gerando quizzes, playgrounds e exercícios', status: 'pending' },
+        { id: 'images', name: 'Gerando imagens por seção', status: 'pending' },
+        { id: 'build-json', name: 'Montando JSON final', status: 'pending' },
+        { id: 'create-draft', name: 'Salvando rascunho no banco', status: 'pending' },
+        { id: 'generate-audio', name: 'Gerando áudios via ElevenLabs', status: 'pending' },
+        { id: 'map-audio', name: 'Mapeando URLs de áudio', status: 'pending' },
+        { id: 'finalize', name: 'Salvando JSON final com áudios', status: 'pending' },
+      ];
+      setPipelineSteps(autoSteps);
+      addLog('success', `Parse: ${parsed.sections.length} seções, ${parsed.inlineQuizzes.length} quizzes manuais, ${(parsed.inlinePlaygrounds || []).length} playgrounds manuais`);
+      if (parsed.hasManualExercises) {
+        addLog('info', `Exercícios manuais detectados: ${parsed.manualExerciseTypes.join(', ')}`);
+      }
+      setPipelineProgress(10);
+
+      // Step 1.5: Refine content via AI
+      setPipelineSteps(prev => prev.map(s => s.id === 'refine' ? { ...s, status: 'running' as const } : s));
+      addLog('info', 'Refinando conteúdo didático via IA...');
+
+      // Get auth session early
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      if (!authSession) throw new Error("Not authenticated");
+
+      try {
+        const { data: refineResult, error: refineError } = await supabase.functions.invoke('v8-refine-content', {
+          body: {
+            sections: parsed.sections.map(s => ({ title: s.title, content: s.content })),
+          },
+        });
+
+        if (!refineError && refineResult) {
+          if (refineResult.sections && Array.isArray(refineResult.sections)) {
+            // Replace section content with refined versions — protect Section 0 (Abertura)
+            const aberturaProtected = parsed.sections[0]?.title === "Abertura" 
+              && !refineResult.sections[0]?.title?.toLowerCase().includes("abertura");
+            const startIdx = aberturaProtected ? 1 : 0;
+            const offset = aberturaProtected ? 1 : 0;
+            if (aberturaProtected) {
+              addLog('info', 'Proteção V8-C01: Abertura preservada do merge de refinamento');
+            }
+            for (let i = startIdx; i < parsed.sections.length && (i - offset) < refineResult.sections.length; i++) {
+              const refIdx = i - offset;
+              parsed.sections[i].content = refineResult.sections[refIdx].content;
+              if (refineResult.sections[refIdx].title) {
+                parsed.sections[i].title = refineResult.sections[refIdx].title;
+              }
+            }
+            // Normalizar título da Section 0 para exatamente "Abertura"
+            if (parsed.sections[0]?.title?.toLowerCase().startsWith("abertura")) {
+              parsed.sections[0].title = "Abertura";
+            }
+            addLog('success', `Conteúdo refinado: ${refineResult.sections.length} seções melhoradas`);
+           }
+        } else {
+          const errText = refineError?.message ?? 'erro desconhecido';
+          addLog('warning', `Refinamento falhou, usando conteúdo original: ${errText}`);
+        }
+      } catch (refineErr) {
+        addLog('warning', `Refinamento falhou, usando conteúdo original: ${refineErr instanceof Error ? refineErr.message : String(refineErr)}`);
+      }
+
+      setPipelineSteps(prev => prev.map(s => s.id === 'refine' ? { ...s, status: 'completed' as const } : s));
+      setPipelineProgress(20);
+
+      // Auth session already obtained in refine step above
+
+      // Step 2: Call AI to generate quizzes, playgrounds, exercises, images
+      setPipelineSteps(prev => prev.map(s => s.id === 'ai-generate' ? { ...s, status: 'running' as const } : s));
+
+      // Calculate orderIndex for pattern rotation (V8-C01/C02/C03)
+      let nextOrderIndex = 0;
+      if (selectedCourseId) {
+        const { count } = await supabase
+          .from("lessons")
+          .select("id", { count: "exact", head: true })
+          .eq("course_id", selectedCourseId);
+        nextOrderIndex = count ?? 0;
+      }
+      const selectedPattern = resolvePattern(nextOrderIndex);
+      const isCompactPattern = selectedPattern.startsWith('V8-B');
+      const patternMeta = PATTERN_META[selectedPattern as PatternId];
+      addLog('info', `Pattern: ${selectedPattern} — ${patternMeta.angle} (${patternMeta.sections} seções, orderIndex=${nextOrderIndex})`);
+
+      // NOTE: usa fetch direto (não supabase.functions.invoke) para suportar
+      // AbortController com timeout de 120s. invoke não aceita signal nativamente.
+      const exerciseController = new AbortController();
+      const exerciseTimeout = setTimeout(() => exerciseController.abort(), 120_000);
+      let response: Response;
+      try {
+        response = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/v8-generate-lesson-content`,
+          {
+            method: "POST",
+            signal: exerciseController.signal,
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authSession.access_token}`,
+              apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            },
+            body: JSON.stringify({
+              sections: parsed.sections.map(s => ({ title: s.title, content: s.content })),
+              manualQuizzes: parsed.inlineQuizzes,
+              manualPlaygrounds: parsed.inlinePlaygrounds || [],
+              manualExercises: parsed.manualExerciseMarkers || [],
+              generateImages: false,
+              lessonTitle: parsed.title,
+              orderIndex: nextOrderIndex,
+              contractPattern: selectedPattern,
+              variationStyle: selectedPatternOverride === 'auto'
+                ? (PATTERN_VARIATION_MAP[selectedPattern as PatternId] || 'everyday')
+                : genVariation,
+              courseId: selectedCourseId || undefined,
+            }),
+          }
+        );
+      } catch (fetchErr: any) {
+        if (fetchErr.name === 'AbortError') {
+          throw new Error('Timeout: a geração de exercícios excedeu 120s. Tente novamente.');
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(exerciseTimeout);
+      }
+
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(`v8-generate-lesson-content failed: ${response.status} - ${errBody}`);
+      }
+
+      const result = await response.json();
+
+      // Update AI-generate step
+      setPipelineSteps(prev => prev.map(s => 
+        s.id === 'ai-generate' ? { ...s, status: 'completed' as const, message: `${result.inlineQuizzes?.length || 0} quizzes, ${result.exercises?.length || 0} exercícios` } : s
+      ));
+      setPipelineProgress(40);
+
+      // Log progress messages from edge function
+      (result.progress || []).forEach((msg: string) => addLog('info', msg));
+      (result.errors || []).forEach((msg: string) => addLog('warning', msg));
+
+      // ── Step 3: Batched image generation (1 section at a time from frontend) ──
+      setPipelineSteps(prev => prev.map(s => s.id === 'images' ? { ...s, status: 'running' as const } : s));
+      addLog('info', `Gerando imagens em lotes: ${parsed.sections.length} seções...`);
+
+      const imageResults: Array<{ index: number; imageUrl?: string; error?: string }> = [];
+      const draftId = `draft-${Date.now()}`;
+      
+      for (let i = 0; i < parsed.sections.length; i++) {
+        // Skip sections with empty content (e.g., exercise-only sections like "Teste rápido")
+        if (!parsed.sections[i].content || parsed.sections[i].content.trim().length === 0) {
+          addLog('info', `Imagem seção ${i + 1}/${parsed.sections.length}: "${parsed.sections[i].title}" — sem conteúdo, pulando`);
+          imageResults.push({ index: i, error: 'empty-content-skipped' });
+          continue;
+        }
+
+        addLog('info', `Imagem seção ${i + 1}/${parsed.sections.length}: "${parsed.sections[i].title}"`);
+        setPipelineSteps(prev => prev.map(s => 
+          s.id === 'images' ? { ...s, message: `Seção ${i + 1}/${parsed.sections.length}` } : s
+        ));
+        setPipelineProgress(40 + Math.round((i / parsed.sections.length) * 30));
+
+        try {
+          const { data: imgData, error: imgError } = await supabase.functions.invoke('v8-generate-section-image', {
+            body: {
+              mode: "auto",
+              content: parsed.sections[i].content,
+              lessonId: draftId,
+              sectionIndex: i,
+              sectionTitle: parsed.sections[i].title,
+              allowText: false,
+            },
+          });
+
+          if (!imgError && imgData?.imageUrl) {
+            imageResults.push({ index: i, imageUrl: imgData.imageUrl });
+            addLog('success', `Imagem seção ${i + 1} ✓`);
+          } else {
+            const msg = imgError?.message || 'sem imageUrl';
+            imageResults.push({ index: i, error: msg });
+            addLog('warning', `Imagem seção ${i + 1} falhou: ${msg.slice(0, 100)}`);
+          }
+        } catch (imgErr) {
+          imageResults.push({ index: i, error: imgErr instanceof Error ? imgErr.message : "Unknown" });
+          addLog('warning', `Imagem seção ${i + 1} erro: ${imgErr instanceof Error ? imgErr.message : "Unknown"}`);
+        }
+      }
+
+      const successImgs = imageResults.filter(r => r.imageUrl).length;
+      setPipelineSteps(prev => prev.map(s => 
+        s.id === 'images' ? { ...s, status: 'completed' as const, message: `${successImgs}/${parsed.sections.length} imagens` } : s
+      ));
+      setPipelineProgress(70);
+      addLog('success', `${successImgs}/${parsed.sections.length} imagens geradas`);
+
+      // Merge image URLs into result sections
+      // Always use parsed.sections as base to preserve Section 0 (Abertura)
+      // and merge AI-refined content + images on top
+      const aiSections = result.sections || [];
+      const sectionsWithImages = parsed.sections.map((ps: any, i: number) => {
+        const aiSection = aiSections[i] || {};
+        const imgResult = imageResults.find(r => r.index === i);
+        return {
+          ...ps,
+          ...(aiSection.content ? { content: aiSection.content } : {}),
+          ...(aiSection.title ? { title: aiSection.title } : {}),
+          ...(imgResult?.imageUrl ? { imageUrl: imgResult.imageUrl } : {}),
+        };
+      });
+      result.sections = sectionsWithImages;
+
+
+      // Step 4: Build final JSON
+      setPipelineSteps(prev => prev.map(s => s.id === 'build-json' ? { ...s, status: 'running' as const } : s));
+      addLog('info', 'Montando JSON final...');
+
+      // === Hard Gate: Validação de integridade estrutural (condicional por pattern) ===
+      const preFinalSections = result.sections || parsed.sections;
+      const minSections = patternMeta.sections;
+      const softMinSections = Math.max(minSections - 1, 5); // Allow 1 section tolerance before hard abort
+      if (preFinalSections.length < softMinSections) {
+        addLog('error', `${selectedPattern} VIOLATION: apenas ${preFinalSections.length} seções (esperado ≥ ${softMinSections})`);
+        throw new Error(`Pipeline abortado: apenas ${preFinalSections.length} seções encontradas (mínimo ${softMinSections})`);
+      }
+      if (preFinalSections.length < minSections) {
+        addLog('warning', `${selectedPattern}: ${preFinalSections.length} seções (ideal ${minSections}). Continuando com tolerância.`);
+      }
+      const s0Title = preFinalSections[0]?.title?.trim() || '';
+      if (!s0Title.toLowerCase().startsWith("abertura")) {
+        addLog('error', `V8-C01 VIOLATION: Section 0 não é "Abertura" (é "${preFinalSections[0]?.title}")`);
+        throw new Error(`Pipeline abortado: Section 0 ausente ou renomeada`);
+      }
+
+      const finalData: V8LessonData = {
+        contentVersion: "v8",
+        title: parsed.title,
+        description: parsed.description,
+        contractPattern: selectedPattern as V8LessonData['contractPattern'],
+        narrativeVariation: selectedVariationLever ? 'variations-editor' : (selectedPatternOverride === 'auto' ? (PATTERN_VARIATION_MAP[selectedPattern as PatternId] || 'everyday') : genVariation),
+        ...(selectedVariationLever ? { variationLever: selectedVariationLever } : {}),
+        sections: (result.sections || parsed.sections).map((s: any, i: number) => ({
+          id: `section-${String(i + 1).padStart(2, "0")}`,
+          title: s.title,
+          content: s.content,
+          audioUrl: "",
+          ...(s.imageUrl ? { imageUrl: s.imageUrl } : {}),
+          ...(s.aiImages && s.aiImages.length > 0 ? { aiImages: s.aiImages } : {}),
+          ...(s.videos && s.videos.length > 0 ? { videos: s.videos } : {}),
+        })),
+        inlineQuizzes: result.inlineQuizzes || parsed.inlineQuizzes,
+        inlinePlaygrounds: result.inlinePlaygrounds || parsed.inlinePlaygrounds || [],
+        inlineInsights: result.inlineInsights || [],
+        inlineExercises: result.inlineExercises || [],
+        inlineCompleteSentences: result.inlineCompleteSentences || [],
+        learnAndGrow: result.learnAndGrow || undefined,
+        exercises: result.exercises || [],
+      };
+
+      const totalInteractions = (finalData.inlineExercises?.length || 0) 
+        + (finalData.inlineCompleteSentences?.length || 0) 
+        + finalData.inlineQuizzes.length;
+
+      const minInteractions = isCompactPattern ? 2 : 2;
+      if (totalInteractions < minInteractions && finalData.sections.length >= 5) {
+        addLog('error', `${selectedPattern} VIOLATION: apenas ${totalInteractions} interações para ${finalData.sections.length} seções`);
+      }
+
+      setPipelineSteps(prev => prev.map(s => s.id === 'build-json' ? { ...s, status: 'completed' as const, message: `${finalData.sections.length} seções` } : s));
+      setPipelineProgress(45);
+      addLog('success', `JSON montado: ${finalData.sections.length} seções, ${finalData.inlineQuizzes.length} quizzes, ${finalData.inlineExercises?.length || 0} inlineEx, ${finalData.inlineCompleteSentences?.length || 0} completeSent, ${finalData.exercises.length} exercícios`);
+
+      // Step 4: Create draft in database
+      setPipelineSteps(prev => prev.map(s => s.id === 'create-draft' ? { ...s, status: 'running' as const } : s));
+      addLog('info', 'Salvando rascunho no banco de dados...');
+
+      // Re-use authSession from step 2
+
+      let lessonId = savedLessonId;
+      if (!lessonId) {
+        lessonId = await createDraftWithRetry({
+          title: finalData.title,
+          estimatedMinutes: estimatedTime,
+          content: finalData as unknown as Json,
+          exercises: (finalData.exercises || []) as unknown as Json,
+        });
+        setSavedLessonId(lessonId);
+      } else {
+        // Update existing draft
+        await updateLessonWithHierarchyRetry(lessonId, {
+          title: finalData.title,
+          content: finalData as unknown as Json,
+          exercises: (finalData.exercises || []) as unknown as Json,
+          model: "v8",
+          estimated_time: estimatedTime,
+          lesson_type: "guided",
+          is_active: false,
+          status: "rascunho",
+        });
+      }
+
+      setPipelineSteps(prev => prev.map(s => s.id === 'create-draft' ? { ...s, status: 'completed' as const, message: `ID: ${lessonId?.slice(0, 8)}...` } : s));
+      setPipelineProgress(55);
+      addLog('success', `Rascunho salvo: ${lessonId}`);
+
+      // ── CHECKPOINT: Mark lesson as needing audio (recovery point) ──
+      await supabase.from("lessons").update({
+        fase_criacao: 'aguardando_audio',
+        progresso_criacao: 55,
+      }).eq("id", lessonId);
+
+      // Step 5: Generate audio via ElevenLabs (per-section, like images)
+      setPipelineSteps(prev => prev.map(s => s.id === 'generate-audio' ? { ...s, status: 'running' as const } : s));
+      addLog('info', 'Gerando áudios via ElevenLabs...');
+
+      const audioResults: AudioResult[] = [];
+      const audioErrors: Array<{ index: number; type: string; error: string }> = [];
+      let totalSizeKB = 0;
+      const audioStartTime = Date.now();
+      const cacheBuster = `?t=${Date.now()}`;
+
+      // Helper to call per-section audio edge function (with request stitching + retry)
+      const generateOneAudio = (type: string, index: number, text: string, previousText?: string, nextText?: string) =>
+        requestSectionAudio({
+          lessonId: lessonId!,
+          accessToken: authSession.access_token,
+          type,
+          index,
+          text,
+          previousText,
+          nextText,
+          onRetry: (attempt, delayMs, reason) => addLog('warning', `Retry ${getAudioItemLabel(type, index)} ${attempt}/${AUDIO_RETRY_DELAYS_MS.length} em ${delayMs / 1000}s: ${reason}`),
+        });
+
+      // 5a: Sections
+      for (let i = 0; i < finalData.sections.length; i++) {
+        const section = finalData.sections[i];
+        addLog('info', `Áudio seção ${i + 1}/${finalData.sections.length}: "${section.title}"`);
+        setPipelineSteps(prev => prev.map(s =>
+          s.id === 'generate-audio' ? { ...s, message: `Seção ${i + 1}/${finalData.sections.length}` } : s
+        ));
+        setPipelineProgress(55 + Math.round((i / finalData.sections.length) * 20));
+
+        try {
+          const prevText = i > 0 ? finalData.sections[i - 1].content : undefined;
+          const nxtText = i < finalData.sections.length - 1 ? finalData.sections[i + 1].content : undefined;
+          const result = await generateOneAudio('section', i, section.content || '', prevText, nxtText);
+          if (result) {
+            audioResults.push(result);
+            totalSizeKB += result.sizeKB;
+            finalData.sections[i].audioUrl = result.audioUrl + cacheBuster;
+            finalData.sections[i].audioDurationSeconds = result.durationEstimate;
+            addLog('success', `Áudio seção ${i + 1} ✓ (${result.sizeKB}KB, ~${result.durationEstimate}s)`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          audioErrors.push({ index: i, type: 'section', error: msg });
+          addLog('warning', `Áudio seção ${i + 1} falhou: ${msg}`);
+        }
+      }
+
+      // 5b: Quizzes
+      for (let i = 0; i < finalData.inlineQuizzes.length; i++) {
+        const quiz = finalData.inlineQuizzes[i];
+        try {
+          const qResult = await generateOneAudio('quiz', i, quiz.question || '');
+          if (qResult) {
+            audioResults.push(qResult);
+            totalSizeKB += qResult.sizeKB;
+            finalData.inlineQuizzes[i].audioUrl = qResult.audioUrl + cacheBuster;
+          }
+        } catch (err) {
+          audioErrors.push({ index: i, type: 'quiz', error: err instanceof Error ? err.message : String(err) });
+        }
+
+        if (quiz.reinforcement?.trim()) {
+          try {
+            const rResult = await generateOneAudio('quiz-reinforcement', i, quiz.reinforcement);
+            if (rResult) {
+              audioResults.push(rResult);
+              totalSizeKB += rResult.sizeKB;
+              finalData.inlineQuizzes[i].reinforcementAudioUrl = rResult.audioUrl + cacheBuster;
+            }
+          } catch (err) {
+            audioErrors.push({ index: i, type: 'quiz-reinforcement', error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+
+        if (quiz.explanation?.trim()) {
+          try {
+            const eResult = await generateOneAudio('quiz-explanation', i, quiz.explanation);
+            if (eResult) {
+              audioResults.push(eResult);
+              totalSizeKB += eResult.sizeKB;
+              finalData.inlineQuizzes[i].explanationAudioUrl = eResult.audioUrl + cacheBuster;
+            }
+          } catch (err) {
+            audioErrors.push({ index: i, type: 'quiz-explanation', error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+      }
+
+      // 5c: Playgrounds
+      for (let i = 0; i < (finalData.inlinePlaygrounds || []).length; i++) {
+        const pg = finalData.inlinePlaygrounds![i];
+        const pgAudioFields: Array<{ type: string; field: string; text: string | undefined }> = [
+          { type: 'playground', field: 'audioUrl', text: pg.narration },
+          { type: 'playground-success', field: 'successAudioUrl', text: pg.successMessage },
+          { type: 'playground-tryagain', field: 'tryAgainAudioUrl', text: pg.tryAgainMessage },
+        ];
+        for (const pf of pgAudioFields) {
+          if (pf.text?.trim()) {
+            try {
+              const pResult = await generateOneAudio(pf.type, i, pf.text);
+              if (pResult) {
+                audioResults.push(pResult);
+                totalSizeKB += pResult.sizeKB;
+                (finalData.inlinePlaygrounds![i] as any)[pf.field] = pResult.audioUrl + cacheBuster;
+              }
+            } catch (err) {
+              audioErrors.push({ index: i, type: pf.type, error: err instanceof Error ? err.message : String(err) });
+            }
+          }
+        }
+      }
+
+      const audioElapsed = Date.now() - audioStartTime;
+      const audioResultSummary: GenerateResponse = {
+        success: audioErrors.length === 0,
+        lessonId: lessonId!,
+        results: audioResults,
+        errors: audioErrors.length > 0 ? audioErrors : undefined,
+        stats: { totalAudios: audioResults.length, totalErrors: audioErrors.length, totalSizeKB: totalSizeKB, elapsedMs: audioElapsed },
+      };
+      setGenerateResult(audioResultSummary);
+
+      setPipelineSteps(prev => prev.map(s => s.id === 'generate-audio' ? { ...s, status: 'completed' as const, message: `${audioResults.length} áudios` } : s));
+      setPipelineProgress(80);
+      addLog('success', `${audioResults.length} áudios gerados (${totalSizeKB}KB) em ${(audioElapsed / 1000).toFixed(1)}s`);
+      if (audioErrors.length > 0) {
+        audioErrors.forEach(e => addLog('warning', `Erro em ${e.type} ${e.index}: ${e.error}`));
+      }
+
+      // Step 6: Map audio already applied above inline
+      setPipelineSteps(prev => prev.map(s => s.id === 'map-audio' ? { ...s, status: 'running' as const } : s));
+      setPipelineSteps(prev => prev.map(s => s.id === 'map-audio' ? { ...s, status: 'completed' as const } : s));
+      setPipelineProgress(90);
+
+      // Step 7: Save final JSON with audio URLs to database
+      setPipelineSteps(prev => prev.map(s => s.id === 'finalize' ? { ...s, status: 'running' as const } : s));
+      addLog('info', 'Salvando JSON final com áudios no banco...');
+
+      try {
+        await updateLessonWithHierarchyRetry(lessonId, {
+          content: finalData as unknown as Json,
+          exercises: (finalData.exercises || []) as unknown as Json,
+          model: "v8",
+          status: "rascunho",
+          is_active: false,
+          fase_criacao: 'completo',
+          progresso_criacao: 100,
+        });
+      } catch (saveErr) {
+        const saveMsg = saveErr instanceof Error ? saveErr.message : String(saveErr);
+        addLog('warning', `Erro ao salvar JSON final: ${saveMsg}. Áudios foram gerados — tente salvar manualmente.`);
+        toast({ title: "⚠️ Áudios gerados, mas erro ao salvar", description: "Tente salvar manualmente via botão Salvar.", variant: "destructive" });
+      }
+
+      setJsonText(JSON.stringify(finalData, null, 2));
+      setEditorMode("json");
+      
+      const validationResult = validateV8Json(finalData);
+      setValidation(validationResult);
+
+      setPipelineSteps(prev => prev.map(s => s.id === 'finalize' ? { ...s, status: 'completed' as const } : s));
+      setPipelineProgress(100);
+      addLog('success', `Pipeline completo! Aula salva com ${audioResults.length} áudios.`);
+
+      setStep(validationResult.valid ? "preview" : "edit");
+
+      toast({
+        title: "✅ Pipeline completo!",
+        description: `${finalData.sections.length} seções, ${finalData.inlineQuizzes.length} quizzes, ${audioResults.length} áudios gerados e salvos.`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPipelineSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error' as const } : s));
+      setPipelineError(msg);
+      addLog('error', msg);
+
+      // ── CHECKPOINT: Save error state for recovery ──
+      if (savedLessonId) {
+        await supabase.from("lessons").update({
+          fase_criacao: 'erro_audio',
+          erro_criacao: msg,
+          progresso_criacao: pipelineProgress,
+        }).eq("id", savedLessonId);
+      }
+
+      toast({ title: "❌ Erro na geração automática", description: msg, variant: "destructive" });
+      setStep("edit");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [contentText, savedLessonId, estimatedTime, toast, resetPipeline, addLog, selectedCourseId, resolvePattern, selectedVariationLever, genVariation, createDraftWithRetry, updateLessonWithHierarchyRetry, pipelineProgress, getAudioItemLabel, requestSectionAudio]);
+
+  const handleRegenerateFailedAudios = useCallback(async () => {
+    if (!generateResult?.errors?.length) return;
+
+    setIsRetryingFailedAudios(true);
+    try {
+      const lessonId = savedLessonId || generateResult.lessonId;
+      if (!lessonId) throw new Error('Lição não encontrada para reprocessamento');
+
+      const parsed = JSON.parse(jsonText) as V8LessonData;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const cacheBuster = `?t=${Date.now()}`;
+      const retriedResults: AudioResult[] = [];
+      const remainingErrors: AudioFailure[] = [];
+      let addedSizeKB = 0;
+
+      for (const failure of generateResult.errors) {
+        const source = resolveAudioSource(parsed, failure);
+        const label = getAudioItemLabel(failure.type, failure.index);
+
+        if (!source?.text?.trim()) {
+          remainingErrors.push({ ...failure, error: `${failure.error} | texto ausente para reprocessar` });
+          addLog('warning', `${label} ignorado: texto ausente para reprocessar`);
+          continue;
+        }
+
+        try {
+          const result = await requestSectionAudio({
+            lessonId,
+            accessToken: session.access_token,
+            type: failure.type,
+            index: failure.index,
+            text: source.text,
+            previousText: source.previousText,
+            nextText: source.nextText,
+            onRetry: (attempt, delayMs, reason) => addLog('warning', `Retry ${label} ${attempt}/${AUDIO_RETRY_DELAYS_MS.length} em ${delayMs / 1000}s: ${reason}`),
+          });
+
+          if (!result) {
+            remainingErrors.push({ ...failure, error: `${failure.error} | resposta vazia na regeneração` });
+            continue;
+          }
+
+          retriedResults.push(result);
+          addedSizeKB += result.sizeKB;
+          applyAudioResultToContent(parsed, result, cacheBuster);
+          addLog('success', `${label} regenerado ✓`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          remainingErrors.push({ ...failure, error: message });
+          addLog('warning', `${label} falhou novamente: ${message}`);
+        }
+      }
+
+      setJsonText(JSON.stringify(parsed, null, 2));
+
+      const { error: saveError } = await supabase
+        .from('lessons')
+        .update({ content: parsed as unknown as Json, exercises: (parsed.exercises || []) as unknown as Json })
+        .eq('id', lessonId);
+
+      if (saveError) throw saveError;
+
+      const resultMap = new Map(generateResult.results.map((item) => [`${item.type}-${item.index}`, item]));
+      retriedResults.forEach((item) => resultMap.set(`${item.type}-${item.index}`, item));
+
+      const mergedResults = Array.from(resultMap.values()).sort((a, b) => {
+        if (a.index !== b.index) return a.index - b.index;
+        return a.type.localeCompare(b.type);
+      });
+
+      setGenerateResult({
+        ...generateResult,
+        success: remainingErrors.length === 0,
+        results: mergedResults,
+        errors: remainingErrors.length > 0 ? remainingErrors : undefined,
+        stats: {
+          ...generateResult.stats,
+          totalAudios: mergedResults.length,
+          totalErrors: remainingErrors.length,
+          totalSizeKB: generateResult.stats.totalSizeKB + addedSizeKB,
+        },
+      });
+
+      toast({
+        title: remainingErrors.length === 0 ? '✅ Áudios faltantes regenerados' : '⚠️ Regeneração parcial concluída',
+        description: remainingErrors.length === 0
+          ? `${retriedResults.length} áudios recuperados com sucesso.`
+          : `${retriedResults.length} recuperados, ${remainingErrors.length} ainda com erro.`,
+      });
+    } catch (error) {
+      toast({
+        title: '❌ Erro ao regenerar áudios',
+        description: error instanceof Error ? error.message : 'Erro desconhecido',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRetryingFailedAudios(false);
+    }
+  }, [applyAudioResultToContent, generateResult, getAudioItemLabel, jsonText, requestSectionAudio, resolveAudioSource, savedLessonId, toast, addLog]);
+
+  const handleSetupApply = useCallback((
+    updatedSections: V8Section[],
+    updatedQuizzes: V8InlineQuiz[],
+    updatedPlaygrounds: V8InlinePlayground[]
+  ) => {
+    const data: V8LessonData = {
+      contentVersion: "v8",
+      title: lessonTitle,
+      description: "",
+      sections: updatedSections,
+      inlineQuizzes: updatedQuizzes,
+      inlinePlaygrounds: updatedPlaygrounds,
+      exercises: [],
+    };
+
+    setJsonText(JSON.stringify(data, null, 2));
+    setEditorMode("json");
+    setValidation(null);
+    setStep("edit");
+    toast({ title: "✅ Setup aplicado!", description: "JSON atualizado — valide para continuar" });
+  }, [lessonTitle, toast]);
+
+  const toggleAudioPreview = (url: string) => {
+    if (playingAudioUrl === url && audioElement) {
+      audioElement.pause();
+      setPlayingAudioUrl(null);
+      setAudioElement(null);
+    } else {
+      audioElement?.pause();
+      const audio = new Audio(url);
+      audio.play();
+      audio.onended = () => { setPlayingAudioUrl(null); setAudioElement(null); };
+      setPlayingAudioUrl(url);
+      setAudioElement(audio);
+    }
+  };
+
+  // ─── Render ───
+  const cardStyle = "rounded-2xl border border-slate-200 bg-white shadow-sm p-5";
+
+  return (
+    <div className="min-h-screen bg-[#FAFBFC] text-slate-900">
+      {/* Header */}
+      <div className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
+          <button onClick={() => navigate("/admin")} className="p-2 rounded-xl hover:bg-slate-100 transition-colors">
+            <ArrowLeft className="w-5 h-5 text-slate-500" />
+          </button>
+          <div className="flex-1">
+            <h1 className="text-lg font-bold text-slate-900">Criar Aula V8</h1>
+            <p className="text-xs text-slate-500">Read & Listen Premium</p>
+          </div>
+          {/* Step indicator */}
+          <div className="flex items-center gap-1.5">
+            {(["edit", "setup", "validate", "generate", "preview", "saved"] as Step[]).map((s, i) => (
+              <div
+                key={s}
+                className={`w-2 h-2 rounded-full transition-colors ${
+                  step === s ? "bg-indigo-500" : i < ["edit", "setup", "validate", "generate", "preview", "saved"].indexOf(step) ? "bg-emerald-500" : "bg-slate-200"
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <main className="max-w-4xl mx-auto px-4 py-6 space-y-5">
+        {/* ─── METADATA ─── */}
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className={cardStyle}>
+          <h2 className="text-sm font-semibold text-slate-700 mb-3">Metadados</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Título e Tempo estimado são derivados automaticamente do JSON gerado pela IA */}
+            {lessonTitle && lessonTitle !== "Nova Aula V8" && (
+              <div className="col-span-full">
+                <span className="text-[11px] font-medium text-slate-400">Título: </span>
+                <span className="text-sm font-semibold text-slate-700">{lessonTitle}</span>
+              </div>
+            )}
+            <div>
+              <label className="text-[11px] font-medium text-slate-500 mb-1 block">Trilha (N1)</label>
+              <Select value={selectedTrailId} onValueChange={(v) => { setSelectedTrailId(v); setSelectedCourseId(''); }}>
+                <SelectTrigger className="bg-slate-50 border-slate-200 rounded-xl text-sm">
+                  <SelectValue placeholder="Selecione a trilha" />
+                </SelectTrigger>
+                <SelectContent>
+                  {trails.map(t => (
+                    <SelectItem key={t.id} value={t.id}>{t.title}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-slate-500 mb-1 block">Jornada (N2)</label>
+              <Select value={selectedCourseId} onValueChange={setSelectedCourseId} disabled={!selectedTrailId || coursesForTrail.length === 0}>
+                <SelectTrigger className="bg-slate-50 border-slate-200 rounded-xl text-sm">
+                  <SelectValue placeholder={!selectedTrailId ? "Selecione a trilha primeiro" : coursesForTrail.length === 0 ? "Nenhuma jornada" : "Selecione a jornada"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {coursesForTrail.map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-2">💡 Selecione trilha e jornada para vincular a aula à hierarquia correta.</p>
+        </motion.div>
+
+        {/* ─── MEDIA UPLOADER ─── */}
+        <V8MediaUploader />
+
+
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className={cardStyle}>
+          <div className="flex items-center justify-between mb-3">
+            {/* Toggle */}
+            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-100 border border-slate-200">
+              <button
+                onClick={() => setEditorMode("content")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${editorMode === "content" ? "bg-indigo-500/20 text-indigo-600" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                Conteúdo
+              </button>
+              <button
+                onClick={() => setEditorMode("json")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${editorMode === "json" ? "bg-indigo-500/20 text-indigo-600" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                <Code className="w-3.5 h-3.5" />
+                JSON
+              </button>
+            </div>
+
+            {editorMode === "content" ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleConvertContent}
+                  disabled={!contentText.trim() || isGenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-600 text-xs font-semibold hover:bg-emerald-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  Converter (manual)
+                </button>
+                <button
+                  onClick={handleConvertAndGenerate}
+                  disabled={!contentText.trim() || isGenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-xs font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  Converter e Gerar Tudo
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleValidate}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/15 text-indigo-600 text-xs font-semibold hover:bg-indigo-500/25 transition-colors"
+              >
+                <Check className="w-3.5 h-3.5" />
+                Validar JSON
+              </button>
+            )}
+          </div>
+
+          {editorMode === "content" ? (
+            <>
+              {/* AI Generation Block */}
+              <div className="mb-4 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Wand2 className="w-4 h-4 text-violet-500" />
+                    <span className="text-xs font-bold text-slate-700">Gerar Conteúdo com IA</span>
+                  </div>
+                  <Select value={genModel} onValueChange={(v: any) => setGenModel(v)}>
+                    <SelectTrigger className="w-44 bg-white border-slate-200 rounded-lg text-xs h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="model1">📝 Completo</SelectItem>
+                      <SelectItem value="model2">🎨 Variações</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {genModel === "model1" ? (
+                  <>
+                    {/* ── Pattern Selector (chips) ── */}
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-500 mb-2 block">Contrato / Pattern</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPatternOverride('auto')}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all ${
+                            selectedPatternOverride === 'auto'
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'
+                          }`}
+                        >
+                          🔄 Auto
+                        </button>
+                        {(Object.entries(PATTERN_META) as [PatternId, typeof PATTERN_META[PatternId]][]).map(([id, meta]) => {
+                          const isCompact = id.startsWith('V8-B');
+                          const isSelected = selectedPatternOverride === id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setSelectedPatternOverride(id)}
+                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all ${
+                                isSelected
+                                  ? isCompact
+                                    ? 'bg-amber-500 text-white border-amber-500'
+                                    : 'bg-indigo-500 text-white border-indigo-500'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                              }`}
+                            >
+                              {meta.label}
+                              <span className={`ml-1 text-[9px] ${isSelected ? 'text-white/70' : 'text-slate-400'}`}>
+                                {meta.sections}s
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {/* Active pattern info */}
+                      {selectedPatternOverride !== 'auto' && (
+                        <div className={`mt-2 px-3 py-1.5 rounded-lg text-[10px] font-medium ${
+                          selectedPatternOverride.startsWith('V8-B')
+                            ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                            : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                        }`}>
+                          {PATTERN_META[selectedPatternOverride].sections} seções · Ângulo: {PATTERN_META[selectedPatternOverride].angle} · Tom: {genVariation} · {selectedPatternOverride.startsWith('V8-B') ? 'Compacto' : 'Completo'}
+                        </div>
+                      )}
+                      {selectedPatternOverride === 'auto' && (
+                        <p className="mt-1.5 text-[10px] text-slate-400">Rotação automática: C01 → B01 → C02 → B02 → C03 → B03</p>
+                      )}
+                    </div>
+
+                    {/* Title + Objectives */}
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-500 mb-1 block">Tema da aula</label>
+                      <input
+                        value={genTitle}
+                        onChange={(e) => setGenTitle(e.target.value)}
+                        placeholder={lessonTitle || "Ex: Como usar prompts para e-mails profissionais"}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-500 mb-1 block">Objetivos (1 por linha, opcional)</label>
+                      <textarea
+                        value={genObjectives}
+                        onChange={(e) => setGenObjectives(e.target.value)}
+                        placeholder={"Entender por que o GPT dá respostas genéricas\nAprender a dar contexto no prompt\nAplicar técnica em situação real"}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-violet-500 resize-y h-16"
+                        rows={3}
+                      />
+                    </div>
+                    <button
+                      onClick={handleGenerateWithAI}
+                      disabled={isGeneratingContent || isGenerating}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-500 to-purple-500 text-white text-xs font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isGeneratingContent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                      {isGeneratingContent ? "Gerando..." : "Gerar Preview com IA"}
+                    </button>
+                    <p className="text-[10px] text-slate-400">
+                      {selectedPatternOverride !== 'auto' && selectedPatternOverride.startsWith('V8-B')
+                        ? 'Gera 7 seções compactas (~12s). Revise e clique "Converter e Gerar Tudo".'
+                        : 'Gera 9 seções completas (~15s). Revise e clique "Converter e Gerar Tudo".'
+                      }
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-500 mb-1 block">Texto Base (narrativa original)</label>
+                      <textarea
+                        value={genBaseText}
+                        onChange={(e) => setGenBaseText(e.target.value)}
+                        placeholder="Cole aqui o texto narrativo que deseja variar. Ex: A maioria das pessoas usa o ChatGPT como um Google glorificado..."
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-violet-500 resize-y h-24"
+                        rows={4}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-500 mb-1 block">Âncoras obrigatórias (1 por linha, opcional)</label>
+                      <textarea
+                        value={genAnchors}
+                        onChange={(e) => setGenAnchors(e.target.value)}
+                        placeholder={"A1: Mencionar prompts genéricos\nA2: Citar a técnica de contexto\nA3: Exemplo prático de e-mail\nA4: Comparação antes/depois\nA5: Call-to-action para praticar"}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-violet-500 resize-y h-16"
+                        rows={3}
+                      />
+                    </div>
+                    <button
+                      onClick={handleGenerateVariations}
+                      disabled={isGeneratingVariations || isGenerating}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isGeneratingVariations ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      {isGeneratingVariations ? "Gerando 3 variações..." : "Gerar 3 Variações"}
+                    </button>
+                    <p className="text-[10px] text-slate-400">
+                      Gera 3 variações completas (9 seções cada) com alavancas aleatórias (~15-25s). Escolha a melhor.
+                    </p>
+
+                    {/* Variation Cards */}
+                    {generatedVariations.length > 0 && (
+                      <div className="space-y-3 mt-3">
+                        <p className="text-[11px] font-semibold text-slate-600">Escolha uma variação:</p>
+                        {generatedVariations.map((v, i) => {
+                          const totalWords = v.sections?.reduce((sum, s) => sum + (s.content || "").split(/\s+/).filter(Boolean).length, 0) || 0;
+                          return (
+                            <div key={i} className="p-3 rounded-lg border border-slate-200 bg-white space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-500">#{i + 1}</span>
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">
+                                    {v.lever}: {v.leverName}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {v.sections?.length || 0} seções · {totalWords} palavras
+                                  </span>
+                                </div>
+                                {v.anchorChecklist && (
+                                  <div className="flex gap-1">
+                                    {Object.entries(v.anchorChecklist).map(([key, ok]) => (
+                                      <span key={key} className={`text-[9px] font-mono ${ok ? "text-emerald-600" : "text-red-400"}`}>
+                                        {ok ? "✓" : "✗"}{key}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <p className="text-[11px] font-semibold text-slate-800">{v.title}</p>
+                              {v.description && <p className="text-[10px] text-slate-500">{v.description}</p>}
+                              <div className="space-y-1 max-h-32 overflow-y-auto">
+                                {(v.sections || []).slice(0, 4).map((s, si) => (
+                                  <div key={si} className="text-[10px] text-slate-600">
+                                    <span className="font-semibold text-slate-700">{si}. {s.title}:</span>{" "}
+                                    {(s.content || "").slice(0, 150)}{(s.content || "").length > 150 ? "…" : ""}
+                                  </div>
+                                ))}
+                                {(v.sections || []).length > 4 && (
+                                  <p className="text-[9px] text-slate-400 italic">+{(v.sections || []).length - 4} seções...</p>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => handleUseVariation(v)}
+                                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-violet-500 text-white text-[11px] font-bold hover:bg-violet-600 transition-colors"
+                              >
+                                <Check className="w-3 h-3" />
+                                Usar esta variação
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <textarea
+                value={contentText}
+                onChange={(e) => setContentText(e.target.value)}
+                placeholder={"# Título da Aula\n\nDescrição opcional...\n\n## Seção 1 — Introdução\nConteúdo markdown aqui...\n\n[PLAYGROUND]\ntitle: Teste na Prática\ninstruction: Compare os dois prompts...\n...\n\n[QUIZ]\nquestion: Qual a diferença?\noptions:\n- [x] Resposta correta\n- [ ] Errada\nexplanation: Porque..."}
+                className="w-full h-96 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-xs font-mono text-slate-300 focus:outline-none focus:border-indigo-500 resize-y placeholder:text-slate-600"
+                spellCheck={false}
+              />
+              <p className="text-[10px] text-slate-500 mt-2">
+                💡 Use <code className="text-slate-600">## Título</code> para seções, <code className="text-slate-600">[PLAYGROUND]</code>, <code className="text-slate-600">[QUIZ]</code> e <code className="text-slate-600">[EXERCISE:tipo]</code> para interações. "Converter e Gerar Tudo" cria automaticamente quizzes, playgrounds, exercícios e imagens via IA.
+              </p>
+            </>
+          ) : (
+            <textarea
+              value={jsonText}
+              onChange={(e) => { setJsonText(e.target.value); setValidation(null); setStep("edit"); }}
+              className="w-full h-80 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-xs font-mono text-slate-300 focus:outline-none focus:border-indigo-500 resize-y"
+              spellCheck={false}
+            />
+          )}
+        </motion.div>
+
+        {/* ─── SETUP WIZARD ─── */}
+        {step === "setup" && parsedSections.length > 0 && (
+          <V8SectionSetup
+            sections={parsedSections}
+            quizzes={parsedQuizzes}
+            playgrounds={parsedPlaygrounds}
+            onApply={handleSetupApply}
+            onBack={() => { setStep("edit"); setEditorMode("content"); }}
+          />
+        )}
+
+        {/* ─── VALIDATION RESULT ─── */}
+        {validation && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cardStyle}>
+            <h2 className="text-sm font-semibold text-slate-700 mb-3">Validação</h2>
+            <div className="flex items-center gap-4 mb-3">
+              <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${validation.valid ? "bg-emerald-500/15 text-emerald-600" : "bg-red-500/15 text-red-600"}`}>
+                {validation.valid ? "✅ Válido" : "❌ Inválido"}
+              </span>
+              <span className="text-xs text-slate-500">
+                {validation.sectionCount} seções · {validation.quizCount} quizzes · {validation.playgroundCount} playgrounds · {validation.exerciseCount} exercícios
+              </span>
+            </div>
+            {validation.errors.length > 0 && (
+              <div className="space-y-1 mb-2">
+                {validation.errors.map((e, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs text-red-400">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>{e}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {validation.warnings.length > 0 && (
+              <div className="space-y-1">
+                {validation.warnings.map((w, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs text-amber-400">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>{w}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ─── GENERATE AUDIO ─── */}
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cardStyle}>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-slate-700">Gerar Áudios</h2>
+            {isGenerating && (
+              <span className="flex items-center gap-1.5 text-xs text-indigo-600">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Gerando...
+              </span>
+            )}
+          </div>
+
+          {!generateResult && !isGenerating && (
+            <button
+              onClick={handleGenerateAudio}
+              disabled={!validation?.valid || step === "edit"}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 text-sm font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Zap className="w-4 h-4" />
+              {!validation?.valid ? "Valide o JSON primeiro" : "Gerar Aula"}
+            </button>
+          )}
+
+          {/* Pipeline Monitor */}
+          {pipelineSteps.length > 0 && (
+            <V7PipelineMonitor
+              isRunning={isGenerating}
+              steps={pipelineSteps}
+              logs={pipelineLogs}
+              progress={pipelineProgress}
+              error={pipelineError}
+            />
+          )}
+        </motion.div>
+
+        {/* ─── AUDIO PREVIEW ─── */}
+        {generateResult && step === "preview" && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={cardStyle}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-700">Preview de Áudios</h2>
+              {generateResult.errors && generateResult.errors.length > 0 && (
+                <button
+                  onClick={handleRegenerateFailedAudios}
+                  disabled={isRetryingFailedAudios}
+                  className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRetryingFailedAudios ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+                  {isRetryingFailedAudios ? 'Re-gerando...' : 'Re-gerar faltantes'}
+                </button>
+              )}
+            </div>
+            <div className="space-y-2">
+              {generateResult.results.map((r) => (
+                <div key={`${r.type}-${r.index}`} className="flex items-center gap-3 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
+                  <button
+                    onClick={() => toggleAudioPreview(r.audioUrl)}
+                    className="w-8 h-8 rounded-full bg-indigo-500/15 flex items-center justify-center hover:bg-indigo-500/25 transition-colors flex-shrink-0"
+                  >
+                    {playingAudioUrl === r.audioUrl ? (
+                      <Pause className="w-3.5 h-3.5 text-indigo-600" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 text-indigo-600 ml-0.5" />
+                    )}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-slate-900 truncate">
+                      {getAudioItemLabel(r.type, r.index)}
+                    </p>
+                    <p className="text-[10px] text-slate-500">~{r.durationEstimate}s · {r.sizeKB}KB</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {generateResult.errors && generateResult.errors.length > 0 && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 space-y-1">
+                {generateResult.errors.map((e, i) => (
+                  <p key={i} className="text-xs text-red-500">❌ {getAudioItemLabel(e.type, e.index)}: {e.error}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-4 text-xs text-slate-500">
+              Total: {generateResult.stats.totalAudios} áudios · {generateResult.stats.totalSizeKB}KB · {(generateResult.stats.elapsedMs / 1000).toFixed(1)}s
+            </div>
+          </motion.div>
+        )}
+
+        {/* ─── SAVE ACTIONS ─── */}
+        {step !== "saved" && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-3">
+            <button
+              onClick={() => handleSave(false)}
+              disabled={isSaving || !validation?.valid}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Salvar Rascunho
+            </button>
+            <button
+              onClick={() => handleSave(true)}
+              disabled={isSaving || !validation?.valid}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-sm font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Salvar e Ativar
+            </button>
+          </motion.div>
+        )}
+
+        {/* ─── SAVED CONFIRMATION ─── */}
+        {step === "saved" && savedLessonId && (
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className={`${cardStyle} text-center`}>
+            <div className="w-14 h-14 rounded-full bg-emerald-500/15 flex items-center justify-center mx-auto mb-4">
+              <Check className="w-7 h-7 text-emerald-500" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-900 mb-1">Aula salva com sucesso!</h2>
+            <p className="text-sm text-slate-500 mb-4">ID: {savedLessonId}</p>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => navigate(`/v8/${savedLessonId}`)}
+                className="px-4 py-2 rounded-xl bg-indigo-500/15 text-indigo-600 text-sm font-semibold hover:bg-indigo-500/25 transition-colors"
+              >
+                Preview da Aula
+              </button>
+              <button
+                onClick={() => {
+                  setStep("edit");
+                  setSavedLessonId(null);
+                  setGenerateResult(null);
+                  setValidation(null);
+                  setJsonText(JSON.stringify(DEFAULT_JSON, null, 2));
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold hover:bg-slate-200 transition-colors"
+              >
+                Criar Outra
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </main>
+    </div>
+  );
+}

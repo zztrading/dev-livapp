@@ -1,0 +1,1167 @@
+import { useState, useEffect, useCallback } from 'react';
+import { GenerateWithInstructionsModal } from './GenerateWithInstructionsModal';
+import { ImportStepsModal } from './ImportStepsModal';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Plus, Trash2, CheckCircle, AlertCircle, Sparkles, Loader2, AlertTriangle, ClipboardList } from 'lucide-react';
+import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+import type { V10BpaPipeline, V10LessonStep } from '@/types/v10.types';
+
+interface Stage2StructureProps {
+  pipeline: V10BpaPipeline;
+  onUpdate: (updates: Partial<V10BpaPipeline>) => Promise<void>;
+}
+
+const PHASE_LABELS: Record<number, string> = {
+  1: 'Preparação',
+  2: 'Configuração',
+  3: 'Execução',
+  4: 'Validação',
+  5: 'Conclusão',
+};
+
+const PHASE_COLORS: Record<number, string> = {
+  1: 'bg-blue-100 text-blue-800 border-blue-200',
+  2: 'bg-green-100 text-green-800 border-green-200',
+  3: 'bg-purple-100 text-purple-800 border-purple-200',
+  4: 'bg-amber-100 text-amber-800 border-amber-200',
+  5: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+};
+
+const PHASE_BORDER_COLORS: Record<number, string> = {
+  1: 'border-l-blue-500',
+  2: 'border-l-green-500',
+  3: 'border-l-purple-500',
+  4: 'border-l-amber-500',
+  5: 'border-l-emerald-500',
+};
+
+const LESSON_TYPE_LABELS: Record<string, string> = {
+  automation: 'Automação',
+  tutorial: 'Tutorial',
+  conceptual: 'Conceitual',
+};
+
+interface NewStepForm {
+  title: string;
+  description: string;
+  phase: 1 | 2 | 3 | 4 | 5;
+  app_name: string;
+  duration_seconds: number;
+}
+
+const INITIAL_FORM: NewStepForm = {
+  title: '',
+  description: '',
+  phase: 1,
+  app_name: '',
+  duration_seconds: 30,
+};
+
+export function Stage2Structure({ pipeline, onUpdate }: Stage2StructureProps) {
+  const [steps, setSteps] = useState<V10LessonStep[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState<NewStepForm>({ ...INITIAL_FORM });
+  const [creatingLesson, setCreatingLesson] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [auditing, setAuditing] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [deletingLesson, setDeletingLesson] = useState(false);
+  const [fixingC2C3, setFixingC2C3] = useState(false);
+  const [showInstructionsModal, setShowInstructionsModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  // Trail/Course selectors for lesson creation
+  const [trails, setTrails] = useState<Array<{ id: string; title: string }>>([]);
+  const [courses, setCourses] = useState<Array<{ id: string; trail_id: string; title: string }>>([]);
+  const [selectedTrailId, setSelectedTrailId] = useState<string>('');
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+
+  useEffect(() => {
+    async function fetchTrailsCourses() {
+      const [t, c] = await Promise.all([
+        supabase.from('trails').select('id, title').eq('is_active', true).order('order_index'),
+        supabase.from('courses').select('id, trail_id, title').eq('is_active', true).order('order_index'),
+      ]);
+      if (t.data) setTrails(t.data);
+      if (c.data) setCourses(c.data);
+    }
+    if (!pipeline.lesson_id) fetchTrailsCourses();
+  }, [pipeline.lesson_id]);
+
+  const fetchSteps = useCallback(async () => {
+    if (!pipeline.lesson_id) return;
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('v10_lesson_steps')
+        .select('*')
+        .eq('lesson_id', pipeline.lesson_id)
+        .order('step_number', { ascending: true });
+
+      if (error) throw error;
+      const typedSteps = (data ?? []) as unknown as V10LessonStep[];
+      setSteps(typedSteps);
+    } catch {
+      toast.error('Erro ao carregar passos');
+    } finally {
+      setLoading(false);
+    }
+  }, [pipeline.lesson_id]);
+
+  useEffect(() => {
+    fetchSteps();
+  }, [fetchSteps]);
+
+  const handleCreateLesson = async () => {
+    setCreatingLesson(true);
+    try {
+      const payload: Record<string, unknown> = {
+        slug: pipeline.slug,
+        title: pipeline.title,
+        status: 'draft' as const,
+        total_steps: 0,
+        estimated_minutes: 0,
+        tools: [] as string[],
+        xp_reward: 0,
+        order_in_trail: 0,
+        ...(selectedTrailId ? { trail_id: selectedTrailId } : {}),
+        ...(selectedCourseId ? { course_id: selectedCourseId } : {}),
+      };
+
+      const { data, error } = await (supabase as any)
+        .from('v10_lessons')
+        .insert(payload)
+        .select('id')
+        .single();
+
+      if (error) throw error;
+
+      const lessonId = (data as unknown as { id: string }).id;
+      await onUpdate({ lesson_id: lessonId });
+      toast.success('Aula criada com sucesso!');
+    } catch {
+      toast.error('Erro ao criar aula');
+    } finally {
+      setCreatingLesson(false);
+    }
+  };
+
+  const handleAddStep = async () => {
+    if (!pipeline.lesson_id) return;
+    if (!form.title.trim()) {
+      toast.error('Título é obrigatório');
+      return;
+    }
+
+    const nextStepNumber = steps.length + 1;
+    const defaultLiv = { tip: '', analogy: '', sos: '' };
+
+    const payload = {
+      lesson_id: pipeline.lesson_id as string,
+      step_number: nextStepNumber,
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      phase: form.phase,
+      app_name: form.app_name.trim() || null,
+      duration_seconds: form.duration_seconds,
+      app_badge_bg: '#e2e8f0',
+      app_badge_color: '#1e293b',
+      accent_color: '#6366f1',
+      progress_percent: 0,
+      frames: JSON.parse('[]'),
+      liv: defaultLiv as Record<string, string>,
+    };
+
+    try {
+      const { error } = await supabase
+        .from('v10_lesson_steps')
+        .insert(payload);
+
+      if (error) throw error;
+
+      await onUpdate({ steps_generated: nextStepNumber });
+      setForm({ ...INITIAL_FORM });
+      setShowForm(false);
+      toast.success('Passo adicionado!');
+      await fetchSteps();
+    } catch {
+      toast.error('Erro ao adicionar passo');
+    }
+  };
+
+  const handleDeleteStep = async (stepId: string) => {
+    if (!confirm('Tem certeza que deseja excluir este passo?')) return;
+
+    setDeletingId(stepId);
+    try {
+      const { error } = await supabase
+        .from('v10_lesson_steps')
+        .delete()
+        .eq('id', stepId);
+
+      if (error) throw error;
+
+      toast.success('Passo excluído');
+      await fetchSteps();
+
+      const newCount = steps.length - 1;
+      await onUpdate({ steps_generated: newCount });
+    } catch {
+      toast.error('Erro ao excluir passo');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleGenerateWithAI = async (instructions?: string): Promise<boolean> => {
+    if (!pipeline.tools || pipeline.tools.length === 0) {
+      toast.error('Declare pelo menos 1 ferramenta na Etapa 1 (Score) antes de gerar passos.');
+      return false;
+    }
+
+    type GenerateChunkResult = {
+      error?: string;
+      stage?: string;
+      lesson_id?: string;
+      steps_count?: number;
+      estimated_minutes?: number;
+      timings?: Record<string, number>;
+      chunk?: {
+        start: number;
+        end: number;
+        requested: number;
+        generated: number;
+      };
+      progress?: {
+        generated: number;
+        total_requested: number;
+        completed: boolean;
+        remaining: number;
+        next_chunk_start: number | null;
+      };
+    };
+
+    const parseInvokeErrorContext = async (invokeError: unknown): Promise<{ body: unknown; status: number | null }> => {
+      const err = invokeError as any;
+      const context = err?.context;
+      if (!context) return { body: null, status: null };
+
+      if (
+        typeof context === 'object' &&
+        context !== null &&
+        typeof context.json === 'function' &&
+        typeof context.text === 'function'
+      ) {
+        const response = context as Response;
+        const status = typeof (response as any).status === 'number' ? (response as any).status : null;
+
+        try {
+          const parsedJson = await response.clone().json();
+          return { body: parsedJson, status };
+        } catch {
+          try {
+            const rawText = await response.clone().text();
+            if (!rawText) return { body: null, status };
+            try {
+              return { body: JSON.parse(rawText), status };
+            } catch {
+              return { body: rawText, status };
+            }
+          } catch {
+            return { body: null, status };
+          }
+        }
+      }
+
+      if (typeof context === 'string') {
+        try {
+          return { body: JSON.parse(context), status: null };
+        } catch {
+          return { body: context, status: null };
+        }
+      }
+
+      if (typeof context === 'object') {
+        const maybeStatus = typeof (context as any).status === 'number' ? (context as any).status : null;
+        return { body: context, status: maybeStatus };
+      }
+
+      return { body: null, status: null };
+    };
+
+    setGenerating(true);
+    try {
+      const stepMatches = (instructions || '').match(/Passo\s+(\d+)/gi) || [];
+      let maxStep = 0;
+      for (const m of stepMatches) {
+        const n = parseInt(m.replace(/\D/g, ''));
+        if (n > maxStep) maxStep = n;
+      }
+      const numSteps = maxStep > 0 ? maxStep : 13;
+
+      let currentChunkSize = 3;
+      const maxCalls = Math.ceil(numSteps / Math.max(currentChunkSize, 1)) + 8;
+
+      let nextChunkStart = 1;
+      let finalResult: GenerateChunkResult | null = null;
+      const forensicTimings: Array<{
+        chunk_start?: number;
+        chunk_end?: number;
+        timings?: Record<string, number>;
+        error?: string;
+      }> = [];
+
+      for (let call = 0; call < maxCalls; call++) {
+        const isFirstCall = nextChunkStart === 1;
+
+        toast.info(`Gerando passos ${nextChunkStart}–${Math.min(nextChunkStart + currentChunkSize - 1, numSteps)} de ${numSteps}...`, { duration: 3000 });
+
+        const { data, error } = await supabase.functions.invoke('v10-generate-steps', {
+          body: {
+            pipeline_id: pipeline.id,
+            num_steps: numSteps,
+            instructions: instructions || '',
+            trail_id: selectedTrailId || null,
+            course_id: selectedCourseId || null,
+            chunk_start: nextChunkStart,
+            chunk_size: currentChunkSize,
+            reset: isFirstCall,
+          },
+        });
+
+        if (error) {
+          const { body, status } = await parseInvokeErrorContext(error);
+          const bodyObject = body && typeof body === 'object' ? (body as Record<string, any>) : null;
+          const bodyMessage = typeof body === 'string' ? body : bodyObject?.error;
+
+          const errorType = bodyObject?.error_type || (status === 408 ? 'ai_timeout' : 'unknown');
+          const retryable = bodyObject?.retryable === true || status === 408;
+          const retryHint = bodyObject?.retry_hint || (status === 408 ? 'reduce_chunk_size' : '');
+          const errorStage = bodyObject?.stage || 'unknown';
+          const errorMsg = bodyMessage || error.message || 'erro desconhecido';
+          const isTimeout = errorType === 'ai_timeout' || /timeout/i.test(errorMsg);
+
+          const shouldReduceChunk = currentChunkSize > 1 && (retryHint === 'reduce_chunk_size' || isTimeout);
+          if (retryable && shouldReduceChunk) {
+            currentChunkSize = 1;
+            toast.warning(`Timeout no chunk (estágio: ${errorStage}). Reduzindo para 1 passo por vez...`, { duration: 5000 });
+            forensicTimings.push({
+              chunk_start: nextChunkStart,
+              error: `timeout_retry_reduced_chunk(status:${status ?? 'n/a'}): ${errorMsg}`,
+            });
+            continue;
+          }
+
+          toast.error(`Erro na geração (${errorStage})${status ? ` [HTTP ${status}]` : ''}: ${errorMsg}`, { duration: 8000 });
+          console.error('[Stage2Structure] invoke error parsed', { status, bodyObject, rawBody: body, message: error.message });
+          return false;
+        }
+
+        const result = (data || {}) as GenerateChunkResult;
+
+        if (result.error) {
+          toast.error(`Erro na geração (${result.stage || 'unknown'}): ${result.error}`);
+          return false;
+        }
+
+        forensicTimings.push({
+          chunk_start: result.chunk?.start,
+          chunk_end: result.chunk?.end,
+          timings: result.timings,
+        });
+
+        if (result.progress?.completed) {
+          finalResult = result;
+          break;
+        }
+
+        const next = result.progress?.next_chunk_start;
+        const generated = result.progress?.generated ?? 0;
+
+        if (!next || next <= nextChunkStart) {
+          toast.error(`Fluxo inconsistente detectado após ${generated}/${numSteps} passos.`);
+          return false;
+        }
+
+        nextChunkStart = next;
+        currentChunkSize = 3;
+      }
+
+      if (!finalResult || !finalResult.progress?.completed) {
+        toast.error('Não foi possível concluir a geração dentro do limite seguro de chamadas.');
+        return false;
+      }
+
+      console.log('[Stage2Structure] Forensic timings by chunk', forensicTimings);
+
+      const totalSteps = finalResult.progress.generated;
+      const updates: Partial<V10BpaPipeline> = {
+        steps_generated: totalSteps,
+      };
+      if (finalResult.lesson_id) {
+        updates.lesson_id = finalResult.lesson_id;
+      }
+
+      await onUpdate(updates);
+      await fetchSteps();
+
+      toast.success(`${totalSteps} passos gerados com sucesso!`);
+      return true;
+    } catch (err) {
+      toast.error(`Erro ao gerar passos: ${err instanceof Error ? err.message : 'erro desconhecido'}`);
+      return false;
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleAudit = async () => {
+    setAuditing(true);
+    try {
+      interface AuditResult {
+        c1: boolean;
+        c2: boolean;
+        c3: boolean;
+        c4: boolean;
+        c6: boolean;
+        c7: boolean;
+        c8: boolean;
+        c9: boolean;
+        details: string[];
+      }
+
+      const auditResults: Record<string, AuditResult> = {};
+      let allPassed = true;
+
+      for (const step of steps) {
+        const details: string[] = [];
+        const desc = step.description || '';
+        const frames = step.frames || [];
+        const allElements = frames.flatMap((f: any) => f.elements || []);
+
+        // C1: description > 30 chars
+        const c1 = desc.length > 30;
+        if (!c1) details.push(`C1: description tem ${desc.length} chars (mín: 30)`);
+
+        // C2: tooltip_term exists when description is substantial (>50 chars = likely has tech terms)
+        const tooltipTerms = allElements.filter((el: any) => el.type === 'tooltip_term');
+        const c2 = tooltipTerms.length > 0 || desc.length < 50;
+        if (!c2) details.push(`C2: description substancial sem tooltip_term nos frames`);
+
+        // C3: if bar_sub changes between frames, nav_breadcrumb must exist
+        const barSubValues = frames.map((f: any) => f.bar_sub).filter(Boolean);
+        const barSubChanges = new Set(barSubValues).size > 1;
+        const hasNavBreadcrumb = allElements.some((el: any) => el.type === 'nav_breadcrumb');
+        const c3 = !barSubChanges || hasNavBreadcrumb;
+        if (!c3) details.push(`C3: bar_sub muda entre frames mas falta nav_breadcrumb`);
+
+        // C4: at least 1 frame per step
+        const c4 = frames.length > 0;
+        if (!c4) details.push(`C4: passo sem frames (${frames.length})`);
+
+        // C5 REMOVIDA: narration_script só existe na Etapa 5, verificar aqui é falso positivo
+
+        // C6: duration > 0
+        const c6 = step.duration_seconds > 0;
+        if (!c6) details.push(`C6: duration_seconds = ${step.duration_seconds}`);
+
+        // C7: title meaningful (> 5 chars)
+        const c7 = (step.title || '').trim().length > 5;
+        if (!c7) details.push(`C7: título muito curto (${step.title?.length || 0} chars)`);
+
+        // C8: phase valid (1-5, Prompt Master R7)
+        const c8 = step.phase >= 1 && step.phase <= 5;
+        if (!c8) details.push(`C8: phase inválida (${step.phase}), deve ser 1-5`);
+
+        // C9: LIV fields present
+        const liv = step.liv as unknown as Record<string, string> | null;
+        const c9 = !!(liv && (liv.tip || liv.analogy || liv.sos));
+        if (!c9) details.push(`C9: campos LIV vazios (tip/analogy/sos)`);
+
+        auditResults[step.id] = { c1, c2, c3, c4, c6, c7, c8, c9, details };
+        if (details.length > 0) allPassed = false;
+      }
+
+      // Count failures per clause
+      const clauseCounts: Record<string, number> = {};
+      Object.values(auditResults).forEach(r => {
+        r.details.forEach(d => {
+          const clause = d.substring(0, 2);
+          clauseCounts[clause] = (clauseCounts[clause] || 0) + 1;
+        });
+      });
+
+      await onUpdate({
+        steps_audited: steps.length,
+        audit_passed: allPassed,
+      });
+
+      // Log audit results
+      await supabase.from('v10_bpa_pipeline_log').insert({
+        pipeline_id: pipeline.id,
+        stage: 2,
+        action: 'audit_c1_c9',
+        details: {
+          total_steps: steps.length,
+          all_passed: allPassed,
+          clause_failures: clauseCounts,
+          per_step: Object.fromEntries(
+            Object.entries(auditResults)
+              .filter(([_, r]) => r.details.length > 0)
+              .map(([id, r]) => [id, r.details])
+          ),
+        },
+      });
+
+      if (allPassed) {
+        toast.success(`Auditoria C1-C9 completa: ${steps.length}/${steps.length} passos aprovados`);
+      } else {
+        const failedSteps = Object.values(auditResults).filter(r => r.details.length > 0).length;
+        const clauseSummary = Object.entries(clauseCounts)
+          .map(([c, n]) => `${c}:${n}`)
+          .join(', ');
+        toast.warning(
+          `Auditoria: ${steps.length - failedSteps}/${steps.length} aprovados. Falhas: ${clauseSummary}`,
+          { duration: 8000 }
+        );
+      }
+    } catch {
+      toast.error('Erro ao auditar estrutura');
+    } finally {
+      setAuditing(false);
+    }
+  };
+
+  // Retroactive C2/C3 fix for existing steps in the database
+  const handleFixC2C3 = async () => {
+    if (steps.length === 0) return;
+    setFixingC2C3(true);
+    let c2Fixed = 0;
+    let c3Fixed = 0;
+
+    const TECH_TERMS: Record<string, string> = {
+      // Technical / API
+      "api": "Interface que permite dois softwares se comunicarem automaticamente",
+      "webhook": "URL que recebe dados automaticamente quando um evento acontece",
+      "endpoint": "Endereço (URL) específico onde uma API recebe requisições",
+      "oauth": "Protocolo de autorização que permite login seguro sem compartilhar senha",
+      "token": "Código temporário usado para autenticar acessos a um serviço",
+      "api key": "Chave secreta usada para autenticar acessos a uma API",
+      "json": "Formato padrão de troca de dados entre sistemas (chave: valor)",
+      "csv": "Formato de arquivo com dados separados por vírgula",
+      "url": "Endereço único que identifica uma página ou recurso na internet",
+      // Automation / Workflow
+      "dashboard": "Painel de controle visual com métricas e ações principais",
+      "workflow": "Sequência automatizada de tarefas que executa em ordem",
+      "trigger": "Evento que dispara uma automação automaticamente",
+      "pipeline": "Sequência de etapas de processamento de dados em ordem",
+      "scenario": "Automação no Make.com que conecta apps com regras definidas",
+      "module": "Bloco funcional dentro de uma automação que executa uma tarefa",
+      "automação": "Execução automática de tarefas por software sem intervenção humana",
+      "automacao": "Execução automática de tarefas por software sem intervenção humana",
+      "fluxo": "Sequência ordenada de passos para atingir um objetivo",
+      // AI / LLM
+      "prompt": "Instrução de texto enviada para uma IA gerar uma resposta",
+      "template": "Modelo pré-pronto que serve como base para criar algo novo",
+      "gpt": "Modelo de linguagem da OpenAI usado para gerar texto",
+      "llm": "Large Language Model — modelo de linguagem treinado em larga escala",
+      "chatbot": "Bot conversacional que responde perguntas automaticamente",
+      "ai": "Inteligência Artificial — sistema que simula raciocínio humano",
+      "ia": "Inteligência Artificial — sistema que simula raciocínio humano",
+      "chatgpt": "Assistente de IA conversacional desenvolvido pela OpenAI",
+      "claude": "Assistente de IA conversacional desenvolvido pela Anthropic",
+      "openai": "Empresa criadora do ChatGPT e dos modelos GPT",
+      "perplexity": "Motor de busca com IA que responde perguntas citando fontes",
+      "computer": "Modo autônomo do Perplexity que executa tarefas de pesquisa sem supervisão",
+      "autônomo": "Que executa tarefas sem supervisão humana constante",
+      "autonomo": "Que executa tarefas sem supervisão humana constante",
+      // Tools
+      "calendly": "Ferramenta de agendamento online que sincroniza com seu calendário",
+      "make": "Plataforma de automação visual que conecta apps (antigo Integromat)",
+      "zapier": "Plataforma de automação que conecta apps sem código",
+      "stripe": "Plataforma de pagamentos online para cobrar clientes",
+      "airtable": "Plataforma que combina planilha com banco de dados visual",
+      "notion": "Ferramenta all-in-one para notas, docs, projetos e banco de dados",
+      "gmail": "Serviço de email do Google",
+      "slack": "Plataforma de comunicação para equipes com canais e integrações",
+      "space": "Espaço de trabalho usado para agrupar pesquisas e projetos",
+      // Sales / Business
+      "crm": "Sistema para gerenciar o relacionamento com clientes",
+      "lead": "Potencial cliente que demonstrou interesse no produto/serviço",
+      "leads": "Potenciais clientes que demonstraram interesse no produto/serviço",
+      "sdr": "Sales Development Representative — profissional que qualifica leads",
+      "icp": "Ideal Customer Profile — perfil do cliente ideal da empresa",
+      "roi": "Return on Investment — retorno sobre investimento",
+      "kpi": "Key Performance Indicator — indicador-chave de desempenho",
+      "prospecção": "Processo de buscar e qualificar novos clientes em potencial",
+      "prospeccao": "Processo de buscar e qualificar novos clientes em potencial",
+      "concorrente": "Empresa ou produto que disputa o mesmo mercado",
+      "concorrentes": "Empresas ou produtos que disputam o mesmo mercado",
+      "briefing": "Documento com informações essenciais sobre um projeto ou cliente",
+      "qualificado": "Validado como adequado para um critério específico",
+      "qualificados": "Validados como adequados para um critério específico",
+      "monitoramento": "Acompanhamento contínuo de atividades ou dados",
+      // Pipeline / Mockup
+      "refero": "Biblioteca interna com 126 mil telas de referência visual",
+      "mockup": "Protótipo visual que simula a interface final de um produto",
+      "bridge": "Ponte que conecta dois serviços para transmissão de dados",
+      "elevenlabs": "Plataforma de geração de voz sintética com IA",
+    };
+
+    try {
+      for (const step of steps) {
+        const desc = (step.description || '').toLowerCase();
+        const title = (step.title || '').toLowerCase();
+        const combinedText = `${title} ${desc}`;
+        const frames = [...(step.frames || [])] as any[];
+        const allElements = frames.flatMap((f: any) => f.elements || []);
+        let modified = false;
+
+        // C2: inject tooltip_term if missing
+        const hasTooltip = allElements.some((el: any) => el.type === 'tooltip_term');
+        if (!hasTooltip && (step.description || '').length >= 50 && frames.length > 0) {
+          const matched: Array<{ term: string; def: string }> = [];
+          for (const [term, def] of Object.entries(TECH_TERMS)) {
+            const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+            if (re.test(combinedText)) {
+              matched.push({ term: term.charAt(0).toUpperCase() + term.slice(1), def });
+              if (matched.length >= 2) break;
+            }
+          }
+          // Fallback 1: capitalized word in description (proper nouns)
+          if (matched.length === 0) {
+            const caps = (step.description || '').match(/\b[A-Z][a-zA-Z]{2,}\b/g);
+            const skip = new Set(['Voce','Esse','Este','Esta','Essa','Aqui','Agora','Depois','Antes','Clique','Acesse','Configure','Crie','Abra','Vamos','Nesse','Nesta','Para','Como','Quando','Onde','Qual','Cada','Todo','Toda','Todos']);
+            if (caps) {
+              for (const w of caps) {
+                if (!skip.has(w) && w.length >= 3) {
+                  matched.push({ term: w, def: 'Funcionalidade ou conceito utilizado neste passo da aula' });
+                  break;
+                }
+              }
+            }
+          }
+
+          // Fallback 2: use step.app_name (always reliable — every step has a tool)
+          if (matched.length === 0 && step.app_name && step.app_name.trim().length >= 2) {
+            matched.push({
+              term: step.app_name.trim(),
+              def: 'Ferramenta ou serviço utilizado neste passo da aula',
+            });
+          }
+
+          // Fallback 3: longest non-verb word from title (ultimate guarantee)
+          if (matched.length === 0) {
+            const titleWords = (step.title || '').match(/[A-Za-zÀ-ÿ]{5,}/g) || [];
+            const skipVerbs = new Set([
+              'criar','acessar','configurar','enviar','explorar','localizar','analisar',
+              'mapear','gerar','aprofundar','mover','iniciar','pedir','aguardar','entender',
+              'reconhecer','verificar','construir','encontrar','parabens','parabéns',
+              'sobre','para','como','quando','onde','qual','cada','todos','todas',
+              'primeira','primeiro','nova','novo','segundo','segunda','terceiro','terceira',
+            ]);
+            const candidate = titleWords.find(
+              (w) => !skipVerbs.has(w.toLowerCase()) && w.length >= 5
+            );
+            if (candidate) {
+              const normalized = candidate.charAt(0).toUpperCase() + candidate.slice(1).toLowerCase();
+              matched.push({
+                term: normalized,
+                def: 'Conceito importante neste passo da aula',
+              });
+            }
+          }
+          if (matched.length > 0) {
+            if (!frames[0].elements) frames[0].elements = [];
+            for (const m of matched) {
+              frames[0].elements.push({ type: 'tooltip_term', term: m.term, tip: m.def });
+            }
+            modified = true;
+            c2Fixed++;
+          }
+        }
+
+        // C3: inject nav_breadcrumb if bar_sub changes
+        const hasBreadcrumb = allElements.some((el: any) => el.type === 'nav_breadcrumb');
+        const barSubs = frames.map((f: any) => f.bar_sub).filter(Boolean);
+        const barSubChanges = new Set(barSubs).size > 1;
+        if (barSubChanges && !hasBreadcrumb) {
+          for (let fi = 1; fi < frames.length; fi++) {
+            const prev = frames[fi - 1].bar_sub;
+            const curr = frames[fi].bar_sub;
+            if (curr && prev && curr !== prev) {
+              if (!frames[fi].elements) frames[fi].elements = [];
+              frames[fi].elements.unshift({
+                type: 'nav_breadcrumb',
+                from: prev,
+                to: curr,
+                how: `${prev} → ${curr}`,
+              });
+            }
+          }
+          modified = true;
+          c3Fixed++;
+        }
+
+        // Update step in DB if modified
+        if (modified) {
+          await supabase
+            .from('v10_lesson_steps')
+            .update({ frames } as any)
+            .eq('id', step.id);
+        }
+      }
+
+      // Log the retroactive fix
+      await supabase.from('v10_bpa_pipeline_log').insert({
+        pipeline_id: pipeline.id,
+        stage: 2,
+        action: 'retroactive_c2c3_fix',
+        details: { c2_fixed: c2Fixed, c3_fixed: c3Fixed, total_steps: steps.length },
+      });
+
+      toast.success(`Correção retroativa: ${c2Fixed} C2 fixes, ${c3Fixed} C3 fixes aplicados`);
+      await fetchSteps(); // Reload steps
+    } catch (err) {
+      toast.error(`Erro ao corrigir C2/C3: ${err instanceof Error ? err.message : 'erro'}`);
+    } finally {
+      setFixingC2C3(false);
+    }
+  };
+
+  const handleDeleteLesson = async () => {
+    if (!pipeline.lesson_id) return;
+    const confirmed = window.confirm(
+      '⚠️ ATENÇÃO: Isso vai excluir permanentemente a aula e TODOS os dados vinculados:\n\n' +
+      '• Todos os passos (steps)\n' +
+      '• Todos os slides de introdução\n' +
+      '• Todas as narrações (Parte A e C)\n' +
+      '• Todos os áudios gerados\n' +
+      '• Todos os anchors\n\n' +
+      'O pipeline voltará ao estado inicial (sem aula vinculada).\n\n' +
+      'Tem certeza?'
+    );
+    if (!confirmed) return;
+
+    setDeletingLesson(true);
+    try {
+      const lessonId = pipeline.lesson_id;
+
+      // 1. Delete anchors (depend on steps)
+      const { data: stepIds } = await supabase
+        .from('v10_lesson_steps')
+        .select('id')
+        .eq('lesson_id', lessonId);
+
+      if (stepIds && stepIds.length > 0) {
+        const ids = stepIds.map((s: { id: string }) => s.id);
+        await supabase
+          .from('v10_lesson_step_anchors')
+          .delete()
+          .in('step_id', ids);
+      }
+
+      // 2. Delete steps
+      await supabase
+        .from('v10_lesson_steps')
+        .delete()
+        .eq('lesson_id', lessonId);
+
+      // 3. Delete intro slides
+      await supabase
+        .from('v10_lesson_intro_slides')
+        .delete()
+        .eq('lesson_id', lessonId);
+
+      // 4. Delete narrations
+      await supabase
+        .from('v10_lesson_narrations')
+        .delete()
+        .eq('lesson_id', lessonId);
+
+      // 5. Delete the lesson itself
+      await supabase
+        .from('v10_lessons')
+        .delete()
+        .eq('id', lessonId);
+
+      // 6. Reset pipeline counters and clear lesson_id
+      await onUpdate({
+        lesson_id: null,
+        steps_generated: 0,
+        steps_audited: 0,
+        audit_passed: false,
+        images_needed: 0,
+        images_generated: 0,
+        images_approved: 0,
+        mockups_total: 0,
+        mockups_from_refero: 0,
+        mockups_generic: 0,
+        mockups_approved: 0,
+        audios_total: 0,
+        audios_generated: 0,
+        audios_approved: 0,
+        assembly_checklist: {} as Record<string, boolean>,
+        assembly_passed: false,
+      } as Partial<V10BpaPipeline>);
+
+      // 7. Log the deletion
+      await supabase.from('v10_bpa_pipeline_log').insert({
+        pipeline_id: pipeline.id,
+        stage: 2,
+        action: 'lesson_deleted',
+        details: { lesson_id: lessonId, reason: 'manual_delete' },
+      });
+
+      setSteps([]);
+      toast.success('Aula excluída com sucesso. Pipeline resetado.');
+    } catch (err) {
+      toast.error(`Erro ao excluir aula: ${err instanceof Error ? err.message : 'erro desconhecido'}`);
+    } finally {
+      setDeletingLesson(false);
+    }
+  };
+
+  return (
+    <>
+      {!pipeline.lesson_id ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Etapa 2 — Estrutura de Passos</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-3 rounded-lg border border-dashed p-6">
+              <AlertCircle className="h-5 w-5 text-muted-foreground" />
+              <p className="text-muted-foreground">
+                Nenhuma aula vinculada ao pipeline
+              </p>
+            </div>
+
+            {/* Trail/Course selectors */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Trilha (N1)</Label>
+                <Select value={selectedTrailId} onValueChange={(val) => { setSelectedTrailId(val); setSelectedCourseId(''); }}>
+                  <SelectTrigger><SelectValue placeholder="Selecione uma trilha" /></SelectTrigger>
+                  <SelectContent>
+                    {trails.map(t => <SelectItem key={t.id} value={t.id}>{t.title}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {selectedTrailId && (
+                <div className="space-y-2">
+                  <Label>Jornada (N2)</Label>
+                  <Select value={selectedCourseId} onValueChange={setSelectedCourseId}>
+                    <SelectTrigger><SelectValue placeholder="Selecione uma jornada" /></SelectTrigger>
+                    <SelectContent>
+                      {courses.filter(c => c.trail_id === selectedTrailId).map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                onClick={handleCreateLesson}
+                disabled={creatingLesson}
+                className="min-h-[44px]"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                {creatingLesson ? 'Criando...' : 'Criar Aula'}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowInstructionsModal(true)}
+                disabled={generating}
+                className="min-h-[44px]"
+              >
+                {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                {generating ? 'Gerando...' : 'Criar Aula + Gerar com IA'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Etapa 2 — Estrutura de Passos</CardTitle>
+              <div className="flex items-center gap-3">
+                {pipeline.lesson_type && (
+                  <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-indigo-50 text-indigo-700 border-indigo-200">
+                    {LESSON_TYPE_LABELS[pipeline.lesson_type] || pipeline.lesson_type}
+                  </span>
+                )}
+                <span className="text-sm text-muted-foreground">
+                  {pipeline.steps_generated} passos gerados
+                  {pipeline.steps_audited > 0 && ` / ${pipeline.steps_audited} auditados`}
+                </span>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Steps list */}
+            {loading ? (
+              <p className="text-muted-foreground text-sm">Carregando passos...</p>
+            ) : steps.length === 0 ? (
+              <p className="text-muted-foreground text-sm">Nenhum passo criado ainda.</p>
+            ) : (
+              <div className="space-y-2">
+                {steps.map((step) => (
+                  <div
+                    key={step.id}
+                    className={`flex items-center justify-between rounded-lg border border-l-4 ${PHASE_BORDER_COLORS[step.phase]} p-3`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-sm font-semibold">
+                        {step.step_number}
+                      </span>
+                      <div>
+                        <p className="font-medium text-sm">{step.title}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${PHASE_COLORS[step.phase]}`}>
+                            {PHASE_LABELS[step.phase]}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {step.duration_seconds}s
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {step.frames.length} frame{step.frames.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleDeleteStep(step.id)}
+                      disabled={deletingId === step.id}
+                      className="min-h-[44px] min-w-[44px] text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add step form */}
+            {showForm ? (
+              <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
+                <p className="font-medium text-sm">Novo Passo (#{steps.length + 1})</p>
+
+                <div className="space-y-2">
+                  <Label htmlFor="step-title">Título</Label>
+                  <Input
+                    id="step-title"
+                    placeholder="Ex: Configurar variáveis de ambiente"
+                    value={form.title}
+                    onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="step-description">Descrição</Label>
+                  <Textarea
+                    id="step-description"
+                    placeholder="Descrição do passo (opcional)"
+                    value={form.description}
+                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    rows={2}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="step-phase">Fase</Label>
+                    <Select
+                      value={String(form.phase)}
+                      onValueChange={(val) => setForm((f) => ({ ...f, phase: Number(val) as 1 | 2 | 3 }))}
+                    >
+                      <SelectTrigger id="step-phase">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1 — Preparação</SelectItem>
+                        <SelectItem value="2">2 — Configuração</SelectItem>
+                        <SelectItem value="3">3 — Execução</SelectItem>
+                        <SelectItem value="4">4 — Validação</SelectItem>
+                        <SelectItem value="5">5 — Conclusão</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="step-duration">Duração (segundos)</Label>
+                    <Input
+                      id="step-duration"
+                      type="number"
+                      min={1}
+                      value={form.duration_seconds}
+                      onChange={(e) => setForm((f) => ({ ...f, duration_seconds: Number(e.target.value) || 30 }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="step-app">App Name</Label>
+                  <Input
+                    id="step-app"
+                    placeholder="Ex: VS Code, Terminal, Chrome"
+                    value={form.app_name}
+                    onChange={(e) => setForm((f) => ({ ...f, app_name: e.target.value }))}
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <Button onClick={handleAddStep} className="min-h-[44px]">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Adicionar
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowForm(false);
+                      setForm({ ...INITIAL_FORM });
+                    }}
+                    className="min-h-[44px]"
+                  >
+                    Cancelar
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowForm(true)}
+                  className="min-h-[44px] flex-1"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Adicionar Passo
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowInstructionsModal(true)}
+                  disabled={generating || !pipeline.lesson_id}
+                  className="min-h-[44px] flex-1"
+                >
+                  {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  {generating ? 'Gerando passos...' : 'Gerar com IA'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowImportModal(true)}
+                  disabled={!pipeline.lesson_id}
+                  className="min-h-[44px] flex-1"
+                >
+                  <ClipboardList className="mr-2 h-4 w-4" />
+                  Importar JSON
+                </Button>
+              </div>
+            )}
+
+            {/* Fix C2/C3 retroactive button */}
+            {steps.length > 0 && !pipeline.audit_passed && (
+              <Button
+                onClick={handleFixC2C3}
+                disabled={fixingC2C3}
+                variant="outline"
+                className="min-h-[44px] w-full"
+              >
+                {fixingC2C3 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                {fixingC2C3 ? 'Corrigindo C2/C3...' : 'Corrigir C2/C3 (tooltip + breadcrumb)'}
+              </Button>
+            )}
+
+            {/* Audit button */}
+            {steps.length > 0 && (
+              <Button
+                onClick={handleAudit}
+                disabled={auditing}
+                className="min-h-[44px] w-full"
+                variant={pipeline.audit_passed ? 'outline' : 'default'}
+              >
+                <CheckCircle className="mr-2 h-4 w-4" />
+                {auditing
+                  ? 'Auditando...'
+                  : pipeline.audit_passed
+                    ? 'Re-auditar Estrutura'
+                    : 'Auditar Estrutura'}
+              </Button>
+            )}
+
+            {/* Delete lesson */}
+            <div className="border-t pt-4 mt-4">
+              <Button
+                variant="outline"
+                onClick={handleDeleteLesson}
+                disabled={deletingLesson}
+                className="min-h-[44px] w-full text-destructive border-destructive/30 hover:bg-destructive/10"
+              >
+                {deletingLesson ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <AlertTriangle className="mr-2 h-4 w-4" />
+                )}
+                {deletingLesson ? 'Excluindo aula...' : 'Excluir Aula e Resetar Pipeline'}
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1 text-center">
+                Remove a aula, todos os passos, narrações e áudios vinculados
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Modal always mounted — available in both branches */}
+      <GenerateWithInstructionsModal
+        open={showInstructionsModal}
+        onClose={() => setShowInstructionsModal(false)}
+        onGenerate={async (instructions) => {
+          const ok = await handleGenerateWithAI(instructions);
+          if (ok) setShowInstructionsModal(false);
+        }}
+        isLoading={generating}
+      />
+
+      <ImportStepsModal
+        open={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        pipelineId={pipeline.id}
+        lessonId={pipeline.lesson_id ?? null}
+        onSuccess={() => {
+          // Reload steps
+          if (pipeline.lesson_id) {
+            setLoading(true);
+            supabase
+              .from('v10_lesson_steps')
+              .select('*')
+              .eq('lesson_id', pipeline.lesson_id)
+              .order('step_number')
+              .then(({ data }) => {
+                if (data) setSteps(data as unknown as V10LessonStep[]);
+                setLoading(false);
+              });
+          }
+        }}
+      />
+    </>
+  );
+}

@@ -1,0 +1,715 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useLesson } from '@/hooks/useLesson';
+import { DragDropLesson } from './DragDropLesson';
+import { GuidedLesson } from './GuidedLesson';
+import { GuidedLessonV3 } from './GuidedLessonV3';
+import { GuidedLessonV4 } from './GuidedLessonV4';
+import { GuidedLessonV5 } from './GuidedLessonV5';
+import { supabase } from '@/integrations/supabase/client';
+import { MiniLiv } from '@/components/MiniMaia';
+import { fundamentos01 } from '@/data/lessons/fundamentos-01';
+import { fundamentos02 } from '@/data/lessons/fundamentos-02';
+import { fundamentos03 } from '@/data/lessons/fundamentos-03';
+import { fundamentos04 } from '@/data/lessons/fundamentos-04';
+import { WordTimestamp, ExerciseConfig } from '@/types/guidedLesson';
+import { ChevronLeft } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { registerGamificationEvent, GamificationResult } from '@/services/gamification';
+import { LessonResultCard } from '@/components/gamification/LessonResultCard';
+import { LessonCompletionSummary } from '@/components/lessons/LessonCompletionSummary';
+import { useUserGamification } from '@/hooks/useUserGamification';
+import { V8LessonRating } from '@/components/lessons/v8/V8LessonRating';
+import { shouldShowLessonRating } from '@/utils/shouldShowLessonRating';
+
+/**
+ * ============================================================================
+ * NORMALIZAÇÃO DE EXERCÍCIOS
+ * ============================================================================
+ * Garante que todos os exercícios vindos do banco tenham a estrutura correta
+ * de acordo com ExerciseConfig interface.
+ *
+ * Adiciona campos obrigatórios se estiverem ausentes:
+ * - id: gerado automaticamente se não existir
+ * - type: validado contra tipos permitidos
+ * - title: fornece fallback se vazio
+ * - instruction: fornece fallback se vazio
+ * - data: garante que existe (objeto vazio se não houver)
+ * ============================================================================
+ */
+function normalizeExercises(rawExercises: any[]): ExerciseConfig[] {
+  if (!Array.isArray(rawExercises)) {
+    console.warn('⚠️ normalizeExercises: rawExercises não é array', rawExercises);
+    return [];
+  }
+
+  return rawExercises.map((exercise, index) => {
+    console.log(`🔍 Normalizando exercício ${index}:`, exercise);
+
+    // Garantir que tem um ID
+    const id = exercise.id || `exercise-${index}`;
+
+    // Validar tipo
+    const validTypes = ['drag-drop', 'complete-sentence', 'scenario-selection', 'fill-in-blanks', 'true-false', 'platform-match', 'data-collection', 'multiple-choice'];
+    const type = validTypes.includes(exercise.type) ? exercise.type : 'fill-in-blanks';
+
+    if (!validTypes.includes(exercise.type)) {
+      console.warn(`⚠️ Exercício ${id}: tipo inválido "${exercise.type}", usando fallback "fill-in-blanks"`);
+    }
+
+    // Garantir campos obrigatórios
+    const normalized: ExerciseConfig = {
+      id,
+      type,
+      title: exercise.title || `Exercício ${index + 1}`,
+      instruction: exercise.instruction || 'Complete este exercício',
+      data: exercise.data || {},
+      passingScore: exercise.passingScore || 70,
+      maxAttempts: exercise.maxAttempts
+    };
+
+    // 🔧 MIGRAÇÃO AUTOMÁTICA: Mover hints para o lugar correto se estiverem no lugar errado
+    // Se hints estiver no nível raiz do exercício, migrar para data.sentences[].hints
+    if (exercise.hints && Array.isArray(exercise.hints) && (type === 'complete-sentence' || type === 'fill-in-blanks')) {
+      console.log(`🔄 Migrando hints do nível raiz para data.sentences[].hints no exercício ${id}`);
+
+      // Garantir que data.sentences existe
+      if (!normalized.data.sentences) {
+        normalized.data.sentences = [];
+      }
+
+      // Migrar hints para cada sentence que não tenha hints
+      if (Array.isArray(normalized.data.sentences)) {
+        normalized.data.sentences = normalized.data.sentences.map((sentence: any) => {
+          if (!sentence.hints) {
+            return { ...sentence, hints: exercise.hints };
+          }
+          return sentence;
+        });
+
+        console.log(`✅ Hints migrados com sucesso para ${normalized.data.sentences.length} sentence(s)`);
+      }
+    }
+
+    console.log(`✅ Exercício ${id} normalizado:`, normalized);
+
+    return normalized;
+  });
+}
+
+interface InteractiveLessonProps {
+  lessonId: string;
+}
+
+export const InteractiveLesson = ({ lessonId }: InteractiveLessonProps) => {
+  const { lesson, loading, submitting, submitAnswers, testInPlayground } = useLesson(lessonId);
+  const [startTime] = useState(Date.now());
+  const [showMaia, setShowMaia] = useState(false);
+  const [isLastLesson, setIsLastLesson] = useState(false);
+  const [wordTimestamps, setWordTimestamps] = useState<WordTimestamp[]>([]);
+  const [nextLessonData, setNextLessonData] = useState<{ id: string; lesson_type: string } | null>(null);
+  const [showResultCard, setShowResultCard] = useState(false);
+  const [showCompletionCard, setShowCompletionCard] = useState(false);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [exerciseScores, setExerciseScores] = useState<number[]>([]);
+  const [gamificationResult, setGamificationResult] = useState<GamificationResult | null>(null);
+  const { refresh: refreshGamification } = useUserGamification();
+  const navigate = useNavigate();
+  const pendingNavigationRef = useRef<(() => void) | null>(null);
+
+  // Buscar word_timestamps e próxima aula para aulas guiadas
+  useEffect(() => {
+    if (!lesson || lesson.lesson_type !== 'guided') return;
+
+    // word_timestamps já vem no select('*') do useLesson — usar direto
+    if ((lesson as any).word_timestamps) {
+      setWordTimestamps((lesson as any).word_timestamps as unknown as WordTimestamp[]);
+    }
+
+    // Buscar próxima lição (única query necessária)
+    const fetchNextLesson = async () => {
+      const { data: nextLesson } = await supabase
+        .from('lessons')
+        .select('id, lesson_type')
+        .eq('trail_id', lesson.trail_id)
+        .eq('is_active', true)
+        .gt('order_index', lesson.order_index)
+        .order('order_index', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      setNextLessonData(nextLesson ? { id: nextLesson.id, lesson_type: nextLesson.lesson_type } : null);
+    };
+    
+    fetchNextLesson();
+  }, [lessonId, lesson?.lesson_type, lesson?.trail_id, lesson?.order_index]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Carregando aula...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!lesson) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-lg text-muted-foreground">Aula não encontrada</p>
+      </div>
+    );
+  }
+
+  const handleSubmit = async (answers: any) => {
+    const timeSpent = Math.floor((Date.now() - startTime) / 1000);
+    const result = await submitAnswers(answers, timeSpent);
+    
+    if (result?.passed && lesson) {
+      // Mostrar card de desempenho primeiro
+      setShowCompletionCard(true);
+    }
+  };
+
+  const handleContinueFromCompletionCard = async () => {
+    console.log('🎁 [RECOMPENSAS] Registrando evento de gamificação');
+    setShowCompletionCard(false);
+    
+    // Registrar evento de gamificação
+    const avgScore = exerciseScores.length > 0
+      ? Math.round(exerciseScores.reduce((a, b) => a + b, 0) / exerciseScores.length)
+      : 100;
+    const result = await registerGamificationEvent('lesson_completed', lessonId, { avg_score: avgScore });
+    
+    if (result) {
+      console.log('✅ [RECOMPENSAS] Resultado recebido:', result);
+      setGamificationResult(result);
+      setShowResultCard(true);
+      refreshGamification();
+    } else {
+      console.error('❌ [RECOMPENSAS] Falha ao obter resultado');
+      // Se falhar, continuar mesmo assim
+      handleContinueFromGamification();
+    }
+  };
+
+  const doNavigateAfterCompletion = async () => {
+    if (!lesson) return;
+    
+    const { data: nextLesson } = await supabase
+      .from('lessons')
+      .select('id, lesson_type, model')
+      .eq('trail_id', lesson.trail_id)
+      .eq('is_active', true)
+      .gt('order_index', lesson.order_index)
+      .order('order_index', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (nextLesson) {
+      navigate(`/lessons-interactive/${nextLesson.id}`);
+    } else if (lesson.course_id) {
+      navigate(`/course/${lesson.course_id}`);
+    } else if (lesson.trail_id) {
+      navigate(`/trail/${lesson.trail_id}`);
+    } else {
+      navigate('/dashboard');
+    }
+  };
+
+  const handleContinueFromGamification = async () => {
+    setShowResultCard(false);
+    
+    if (!lesson) return;
+
+    // Check if rating modal should appear
+    const courseId = lesson.course_id || null;
+    const showRating = await shouldShowLessonRating(lessonId, courseId, lesson.trail_id);
+    
+    if (showRating) {
+      pendingNavigationRef.current = doNavigateAfterCompletion;
+      setShowRatingModal(true);
+    } else {
+      await doNavigateAfterCompletion();
+    }
+  };
+
+  const handleRatingClose = () => {
+    setShowRatingModal(false);
+    if (pendingNavigationRef.current) {
+      pendingNavigationRef.current();
+      pendingNavigationRef.current = null;
+    }
+  };
+  
+  const handleBackToTrail = () => {
+    setShowResultCard(false);
+    if (lesson?.course_id) {
+      navigate(`/course/${lesson.course_id}`);
+    } else if (lesson?.trail_id) {
+      navigate(`/trail/${lesson.trail_id}`);
+    } else {
+      navigate('/dashboard');
+    }
+  };
+
+  const handleMaiaClose = async () => {
+    setShowMaia(false);
+    
+    // Salvar flag de que a Liv de completion já foi mostrada para não reaparecer
+    if (lesson && isLastLesson) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const userId = session.user.id;
+        localStorage.setItem(`liv-completion-${userId}-${lesson.trail_id}`, 'true');
+      }
+    }
+    
+    // Não redirecionar automaticamente - deixar o usuário usar os botões do ConclusionScreen
+  };
+
+  const componentProps = {
+    content: lesson.content as any,
+    onSubmit: handleSubmit,
+    testInPlayground,
+    submitting,
+    previousAnswers: lesson.user_answers,
+    previousScore: lesson.user_score,
+  };
+
+  // Renderizar conteúdo baseado no tipo de aula
+  const renderLessonContent = () => {
+    switch (lesson.lesson_type) {
+      case 'guided':
+      // Aulas guiadas com Liv narradora
+
+      // Função para APENAS marcar aula como completa (sem navegar)
+      // V5/V4/V3 gerenciam seu próprio fluxo de conclusão internamente
+      const markLessonComplete = async () => {
+        const timeSpent = Math.floor((Date.now() - startTime) / 1000);
+        await submitAnswers({
+          audioProgress: 100,
+          allExercisesCompleted: true
+        }, timeSpent);
+        // NÃO mostrar CompletionCard aqui — V5 cuida do próprio fluxo
+      };
+
+      // Função LEGADO para compatibilidade (não deve ser chamada do ConclusionScreen)
+      const handleGuidedComplete = async (data?: { audioProgress?: number; allExercisesCompleted?: boolean }) => {
+        // Marca a aula como completa
+        const timeSpent = Math.floor((Date.now() - startTime) / 1000);
+        await submitAnswers({
+          audioProgress: data?.audioProgress || 0,
+          allExercisesCompleted: data?.allExercisesCompleted || false
+        }, timeSpent);
+
+        // Buscar próxima aula
+        const { data: nextLesson } = await supabase
+          .from('lessons')
+          .select('id, lesson_type')
+          .eq('trail_id', lesson.trail_id)
+          .eq('is_active', true)
+          .gt('order_index', lesson.order_index)
+          .order('order_index', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (nextLesson) {
+          const route = nextLesson.lesson_type
+            ? `/lessons-interactive/${nextLesson.id}`
+            : `/lessons/${nextLesson.id}`;
+          navigate(route);
+        } else {
+          navigate(`/trail/${lesson.trail_id}`);
+        }
+      };
+
+      // Cache busting - usar content mais recente
+      let guidedLessonData = null;
+      
+      const dbContent = lesson.content && typeof lesson.content === 'object' && 'sections' in lesson.content 
+        ? lesson.content as any 
+        : null;
+      
+      // 🆕 Suporte para formato V3 (slides ao invés de sections)
+      const dbContentV3 = lesson.content && typeof lesson.content === 'object' && 'slides' in lesson.content
+        ? lesson.content as any
+        : null;
+      
+      let localContent = null;
+      if (lesson.title.includes('que é a IA')) {
+        localContent = fundamentos01;
+      } else if (lesson.title.includes('com Você')) {
+        localContent = fundamentos02;
+      } else if (lesson.title.includes('Cérebro Digital')) {
+        localContent = fundamentos03;
+      } else if (lesson.title.includes('Seu Bolso')) {
+        localContent = fundamentos04;
+      }
+      
+      const dbVersion = dbContent?.contentVersion || dbContentV3?.contentVersion || 0;
+      const localVersion = localContent?.contentVersion || 0;
+      
+      if (localVersion > dbVersion && localContent) {
+        console.log('Using local content version', localVersion);
+        guidedLessonData = localContent;
+      } else if (dbContent) {
+        console.log('Using database version', dbVersion);
+        guidedLessonData = dbContent;
+      } else if (dbContentV3) {
+        console.log('🔄 [V3] Converting V3 format (slides) to V4 format (sections)');
+        // Converter formato V3 para V4
+        guidedLessonData = {
+          ...dbContentV3,
+          sections: dbContentV3.slides?.map((slide: any, index: number) => ({
+            id: slide.id || `section-${index}`,
+            timestamp: 0, // V3 não tem timestamps separados
+            content: slide.content || '',
+            visualContent: slide.visualContent || slide.content || '',
+            audio_url: index === 0 ? dbContentV3.audioUrl : undefined
+          })) || []
+        };
+        console.log('✅ [V3] Converted', {
+          slidesCount: dbContentV3.slides?.length || 0,
+          sectionsCount: guidedLessonData.sections?.length || 0
+        });
+      } else if (localContent) {
+        console.log('Fallback to local data', localVersion);
+        guidedLessonData = localContent;
+      }
+
+      // ============================================================================
+      // NORMALIZAR EXERCÍCIOS (ADICIONADO 2025-11-15)
+      // ============================================================================
+      // Usa normalizeExercises() para garantir estrutura correta
+      // Prioridade: exercises do DB → exercisesConfig do content local
+      // ============================================================================
+      let normalizedExercises: ExerciseConfig[] | undefined = undefined;
+
+      if (lesson.exercises && Array.isArray(lesson.exercises) && lesson.exercises.length > 0) {
+        console.log('📝 Normalizando exercícios do banco de dados...');
+        normalizedExercises = normalizeExercises(lesson.exercises);
+      } else if (guidedLessonData?.exercisesConfig) {
+        console.log('📝 Usando exercícios do content (já devem estar normalizados)');
+        normalizedExercises = guidedLessonData.exercisesConfig;
+      }
+
+      console.log('✅ Exercícios normalizados:', {
+        fromDB: lesson.exercises?.length || 0,
+        fromContent: guidedLessonData?.exercisesConfig?.length || 0,
+        normalized: normalizedExercises?.length || 0,
+        structure: normalizedExercises?.[0]
+      });
+
+      // ✅ CRIAR OBJETO COMPLETO para GuidedLesson com TODOS os campos necessários
+      if (guidedLessonData) {
+
+
+        // 🔍 DEBUG: Verificar estrutura do playgroundConfig no content
+        console.log('🔍 [INTERACTIVE→GUIDED] Estrutura do content:', {
+          hasSections: !!guidedLessonData.sections,
+          numSections: guidedLessonData.sections?.length || 0,
+          firstSectionPlayground: guidedLessonData.sections?.[0]?.playgroundConfig ? {
+            type: guidedLessonData.sections[0].playgroundConfig.type,
+            hasRealConfig: !!guidedLessonData.sections[0].playgroundConfig.realConfig,
+            realConfigStructure: guidedLessonData.sections[0].playgroundConfig.realConfig ? 
+              Object.keys(guidedLessonData.sections[0].playgroundConfig.realConfig) : [],
+            fullPlaygroundConfig: JSON.stringify(guidedLessonData.sections[0].playgroundConfig, null, 2)
+          } : null
+        });
+
+        guidedLessonData = {
+          id: lesson.id,
+          title: lesson.title,
+          trackId: lesson.trail_id,
+          courseId: lesson.course_id || null,
+          trackName: '', // Não temos esse dado aqui, mas não é usado
+          duration: lesson.estimated_time ? lesson.estimated_time * 60 : 0,
+          sections: guidedLessonData.sections || [],
+          // Usar normalizedExercises se existir e tiver items, senão fallback para content
+          exercisesConfig: normalizedExercises && normalizedExercises.length > 0
+            ? normalizedExercises
+            : guidedLessonData.exercisesConfig,
+          finalPlaygroundConfig: guidedLessonData.finalPlaygroundConfig,
+          contentVersion: guidedLessonData.contentVersion,
+          experienceCards: guidedLessonData.experienceCards || [] // 🆕 V5: Experience cards
+        };
+
+        console.log('✅ Objeto GuidedLessonData completo criado:', {
+          hasId: !!guidedLessonData.id,
+          hasTitle: !!guidedLessonData.title,
+          hasSections: guidedLessonData.sections?.length,
+          hasExercises: !!guidedLessonData.exercisesConfig,
+          exercisesCount: guidedLessonData.exercisesConfig?.length
+        });
+      } else {
+        console.error('❌ guidedLessonData não existe!');
+      }
+
+      // FIX CRITICO: Buscar audioUrl do content se coluna estiver null
+      let audioUrl = lesson.audio_url || 
+                     (guidedLessonData?.sections?.[0]?.audio_url) || 
+                     null;
+      
+      console.log('Audio URL resolved:', {
+        fromDB: lesson.audio_url,
+        fromContent: guidedLessonData?.sections?.[0]?.audio_url,
+        final: audioUrl
+      });
+
+      if (!guidedLessonData) {
+        return (
+          <div className="text-center py-12">
+            <p className="text-lg text-muted-foreground">Conteúdo da aula guiada não encontrado</p>
+            <p className="text-sm text-muted-foreground mt-2">Título da aula: {lesson.title}</p>
+          </div>
+        );
+      }
+
+      // 🐛 DEBUG: Log do modelo da lição para diagnóstico
+      console.log('🔍 [INTERACTIVE] Renderizando lição guiada:', {
+        lessonId: lesson.id,
+        title: lesson.title,
+        model: lesson.model,
+        willUseV4Component: lesson.model === 'v4',
+        willUseV5Component: lesson.model === 'v5',
+        hasExercises: !!guidedLessonData?.exercisesConfig,
+        exercisesCount: guidedLessonData?.exercisesConfig?.length || 0
+      });
+
+      // 🎬 V3: Transformar dados do banco para estrutura de slides
+      if (lesson.model === 'v3') {
+        const dbContent = lesson.content && typeof lesson.content === 'object' ? lesson.content as any : {};
+
+        // V3 usa estrutura diferente: slides ao invés de sections
+        const v3LessonData = {
+          id: lesson.id,
+          title: lesson.title,
+          trackId: lesson.trail_id,
+          trackName: '',
+          duration: lesson.estimated_time ? lesson.estimated_time * 60 : 0,
+          audioUrl: lesson.audio_url || dbContent.audioUrl || '',
+          wordTimestamps: wordTimestamps.length > 0 ? wordTimestamps : undefined,
+          slides: dbContent.slides || [],
+          exercisesConfig: normalizedExercises && normalizedExercises.length > 0
+            ? normalizedExercises
+            : dbContent.exercisesConfig,
+          finalPlaygroundConfig: dbContent.finalPlaygroundConfig,
+          contentVersion: dbContent.contentVersion,
+          schemaVersion: dbContent.schemaVersion
+        };
+
+        console.log('🎬 [V3] Dados da lição transformados:', {
+          hasAudioUrl: !!v3LessonData.audioUrl,
+          numSlides: v3LessonData.slides?.length || 0,
+          hasExercises: !!v3LessonData.exercisesConfig,
+          hasPlayground: !!v3LessonData.finalPlaygroundConfig
+        });
+
+        return (
+          <>
+            {showMaia && isLastLesson && (
+              <MiniLiv
+                message="🎉 Parabéns! Você concluiu todas as aulas desta trilha! Continue assim e você vai dominar a IA!"
+                variant="celebration"
+                showConfetti={true}
+                onClose={handleMaiaClose}
+              />
+            )}
+            <GuidedLessonV3
+              lessonData={v3LessonData}
+              onComplete={handleGuidedComplete}
+              onMarkComplete={markLessonComplete}
+              nextLessonId={nextLessonData?.id}
+              nextLessonType={nextLessonData?.lesson_type}
+              trailId={lesson.trail_id}
+            />
+          </>
+        );
+      }
+
+      // 🚀 V5: Experience Cards Animados
+      if (lesson.model === 'v5') {
+        console.log('✨ [V5] Renderizando lição com Experience Cards:', {
+          numSections: guidedLessonData?.sections?.length || 0,
+          hasExperienceCards: guidedLessonData?.sections?.some((s: any) => s.experienceCards?.length > 0)
+        });
+
+        return (
+          <>
+            {showMaia && isLastLesson && (
+              <MiniLiv
+                message="🎉 Parabéns! Você concluiu todas as aulas desta trilha! Continue assim e você vai dominar a IA!"
+                variant="celebration"
+                showConfetti={true}
+                onClose={handleMaiaClose}
+              />
+            )}
+            <GuidedLessonV5
+              lessonData={guidedLessonData}
+              onComplete={handleGuidedComplete}
+              onMarkComplete={markLessonComplete}
+              audioUrl={audioUrl}
+              wordTimestamps={wordTimestamps.length > 0 ? wordTimestamps : undefined}
+              nextLessonId={nextLessonData?.id}
+              nextLessonType={nextLessonData?.lesson_type}
+              trailId={lesson.trail_id}
+            />
+          </>
+        );
+      }
+
+      return (
+        <>
+          {showMaia && isLastLesson && (
+            <MiniLiv
+              message="🎉 Parabéns! Você concluiu todas as aulas desta trilha! Continue assim e você vai dominar a IA!"
+              variant="celebration"
+              showConfetti={true}
+              onClose={handleMaiaClose}
+            />
+          )}
+          {lesson.model === 'v5' ? (
+            <GuidedLessonV5
+              lessonData={guidedLessonData}
+              onComplete={handleGuidedComplete}
+              onMarkComplete={markLessonComplete}
+              audioUrl={audioUrl}
+              wordTimestamps={wordTimestamps.length > 0 ? wordTimestamps : undefined}
+              nextLessonId={nextLessonData?.id}
+              nextLessonType={nextLessonData?.lesson_type}
+              trailId={lesson.trail_id}
+            />
+          ) : lesson.model === 'v4' ? (
+            <GuidedLessonV4
+              lessonData={guidedLessonData}
+              onComplete={handleGuidedComplete}
+              onMarkComplete={markLessonComplete}
+              audioUrl={audioUrl}
+              wordTimestamps={wordTimestamps.length > 0 ? wordTimestamps : undefined}
+              nextLessonId={nextLessonData?.id}
+              nextLessonType={nextLessonData?.lesson_type}
+              trailId={lesson.trail_id}
+            />
+          ) : (
+            <GuidedLesson
+              lessonData={guidedLessonData}
+              onComplete={handleGuidedComplete}
+              onMarkComplete={markLessonComplete}
+              audioUrl={audioUrl}
+              wordTimestamps={wordTimestamps.length > 0 ? wordTimestamps : undefined}
+              nextLessonId={nextLessonData?.id}
+              nextLessonType={nextLessonData?.lesson_type}
+              trailId={lesson.trail_id}
+            />
+          )}
+        </>
+      );
+    case 'drag-drop':
+      return (
+        <>
+          {showMaia && isLastLesson && (
+            <MiniLiv
+              message="🎉 Parabéns! Você concluiu todas as aulas desta trilha! Continue assim e você vai dominar a IA!"
+              variant="celebration"
+              showConfetti={true}
+              onClose={handleMaiaClose}
+            />
+          )}
+          <div className="min-h-screen bg-slate-950">
+            <header className="sticky top-0 z-50 backdrop-blur-xl border-b"
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.95)',
+                      borderColor: 'rgba(139, 92, 246, 0.3)',
+                      boxShadow: '0 4px 30px rgba(139, 92, 246, 0.1)'
+                    }}>
+              <div className="container mx-auto px-4 py-3 flex items-center gap-3">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => navigate(lesson.course_id ? `/course/${lesson.course_id}` : `/trail/${lesson.trail_id}`)}
+                  className="flex-shrink-0"
+                  aria-label="Voltar para trilha"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </Button>
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-sm sm:text-base font-semibold text-gray-100 truncate">{lesson?.title}</h1>
+                </div>
+              </div>
+            </header>
+            <div className="container mx-auto px-4 py-6">
+              <DragDropLesson {...componentProps} />
+            </div>
+          </div>
+        </>
+      );
+    default:
+      return (
+        <div className="text-center py-12">
+          <p className="text-lg text-muted-foreground">Tipo de aula não suportado</p>
+        </div>
+      );
+    }
+  };
+
+  // Renderizar componente completo com cards de resumo e gamificação
+  return (
+    <>
+      {renderLessonContent()}
+
+      {/* 
+        ✅ Overlays de conclusão/gamificação/rating 
+        NÃO renderizar para V5/V4/V3 — eles gerenciam internamente 
+      */}
+      {lesson?.model !== 'v5' && lesson?.model !== 'v4' && lesson?.model !== 'v3' && (
+        <>
+          {/* ✅ CARD DE RESUMO (desempenho antes da gamificação) */}
+          {showCompletionCard && lesson && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="max-w-lg w-full">
+                <LessonCompletionSummary
+                  lessonTitle={lesson.title}
+                  exerciseScores={exerciseScores}
+                  totalExercises={lesson.exercises?.length || 0}
+                  onContinue={handleContinueFromCompletionCard}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 🎮 CARD DE RESULTADO DA GAMIFICAÇÃO */}
+          {showResultCard && gamificationResult && (
+            <LessonResultCard
+              xpDelta={gamificationResult.xp_delta}
+              coinsDelta={gamificationResult.coins_delta}
+              newPowerScore={gamificationResult.new_power_score}
+              newCoins={gamificationResult.new_coins}
+              patentName={gamificationResult.patent_name}
+              isNewPatent={gamificationResult.is_new_patent}
+              exerciseScores={exerciseScores} 
+              nextPatentThreshold={getNextPatentThreshold(gamificationResult.new_patent_level)}
+              onContinue={handleContinueFromGamification}
+              onBackToTrail={handleBackToTrail}
+            />
+          )}
+
+          {/* ⭐ MODAL DE AVALIAÇÃO */}
+          <V8LessonRating
+            lessonId={lessonId}
+            open={showRatingModal}
+            onClose={handleRatingClose}
+          />
+        </>
+      )}
+    </>
+  );
+};
+
+// Helper para calcular próxima patente
+function getNextPatentThreshold(currentLevel: number): number | undefined {
+  const thresholds = [200, 600, 1200];
+  return thresholds[currentLevel];
+}

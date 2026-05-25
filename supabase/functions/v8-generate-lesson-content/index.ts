@@ -1,0 +1,1983 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+};
+
+// ─── Phase 1 (Gap 1): Encoding + pedagogical sanitization for AI-generated Portuguese text ───
+function sanitizeEncoding(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+  const fixes: [RegExp, string][] = [
+    [/\bn o\b/gi, "não é"], [/\bausncia\b/gi, "ausência"], [/\bespecfico\b/gi, "específico"],
+    [/\binformaes\b/gi, "informações"], [/\bdefinio\b/gi, "definição"], [/\bcompreenso\b/gi, "compreensão"],
+    [/\bprtico\b/gi, "prático"], [/\bexplicao\b/gi, "explicação"], [/\bcontedo\b/gi, "conteúdo"],
+    [/\bpossvel\b/gi, "possível"], [/\binteligncia\b/gi, "inteligência"], [/\bexperincia\b/gi, "experiência"],
+    [/\bverdadeiro\b/gi, "verdadeiro"], [/\binterao\b/gi, "interação"],
+    [/(?<![a-záéíóúâêôãõçà])til(?=\s|[.,;:!?]|$)/gi, "útil"],
+  ];
+  let r = text;
+  for (const [p, rep] of fixes) { r = r.replace(p, rep); }
+  r = r.replace(/\s{2,}/g, ' ').trim();
+  if (r !== text) console.warn(`[sanitizeEncoding] Fixed: "${text.slice(0, 60)}..."`);
+  return r;
+}
+
+// ElevenLabs v3 — COMPLETE official audio tags whitelist (from docs + blog 2026-03-06)
+// Categories: Emotions/Directions, Non-verbal/Reactions, Delivery/Pacing
+const ELEVENLABS_EMOTION_TAGS = new Set([
+  // Emotions & Directions
+  'happy', 'sad', 'excited', 'angry', 'whisper', 'annoyed', 'appalled',
+  'thoughtful', 'surprised', 'sarcastic', 'curious', 'crying', 'mischievously',
+  'impressed', 'delighted', 'amazed', 'warmly', 'excitedly', 'curiously',
+  'dramatically', 'happily', 'sorrowful',
+  // Tone/Mood (from v3 docs examples & blog)
+  'calm', 'nervous', 'frustrated', 'serious', 'cheerful', 'empathetic',
+  'assertive', 'dramatic tone', 'reflective', 'hopeful', 'energetic',
+  'warm', 'encouraging',
+  // Non-verbal / Human reactions
+  'laughs', 'laughing', 'chuckles', 'sighs', 'sigh', 'clears throat',
+  'exhales', 'exhales sharply', 'inhales deeply', 'snorts', 'gulps',
+  'swallows', 'gasps', 'wheezing', 'giggles', 'giggling', 'muttering',
+  'stammers', 'whispers',
+  // Delivery & Pacing
+  'pause', 'short pause', 'long pause', 'rushed', 'slows down',
+  'hesitates', 'drawn out', 'deliberate', 'rapid-fire', 'timidly',
+  'emphasized', 'understated',
+  // Multi-speaker / Creative (from blog examples)
+  'interrupting', 'overlapping', 'singing', 'sings', 'woo',
+  'happy gasp', 'frustrated sigh', 'laughs softly', 'starts laughing',
+  'with genuine belly laugh',
+]);
+
+function sanitizePedagogicalText(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+
+  return text
+    .replace(/(^|\n)\s*(?:Segmento\s+vida\s+real\s+desta\s+atividade|Atividade\s+prática|Atividade\s+pratica|Contexto\s+real)\s*:[^\n]*(?=\n|$)/gi, '$1')
+    .replace(/(^|\n)\s*(?:Responda rapidamente[^\n]*|Confie nos seus instintos[^\n]*|Sem pensar muito[^\n]*|Responda agora[^\n]*)(?=\n|$)/gi, '$1')
+    // Strip bracket tags EXCEPT ElevenLabs emotion tags
+    .replace(/\[([^\]]{1,40})\]/gi, (match, inner) => {
+      return ELEVENLABS_EMOTION_TAGS.has(inner.toLowerCase().trim()) ? match : '';
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sanitizeV8Text(text: string): string {
+  return sanitizePedagogicalText(sanitizeEncoding(text));
+}
+
+function sanitizeFields(obj: any, fields: string[]): any {
+  const r = { ...obj };
+  for (const f of fields) {
+    if (typeof r[f] === 'string') r[f] = sanitizeV8Text(r[f]);
+  }
+  return r;
+}
+
+// ─── Exercise type schemas for tool calling ───
+const EXERCISE_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "generate_exercises",
+      description: "Generate 2-4 final exercises for the lesson, choosing the best types based on content context. Vary types - don't repeat. Prioritize interactive types (drag-drop, flipcard, platform-match) over text-only.",
+      parameters: {
+        type: "object",
+        properties: {
+          exercises: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            items: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["drag-drop", "fill-in-blanks", "scenario-selection", "true-false", "platform-match", "data-collection", "complete-sentence", "multiple-choice", "flipcard-quiz", "timed-quiz"],
+                },
+                title: { type: "string" },
+                instruction: { type: "string" },
+                data: {
+                  type: "object",
+                  description: "Exercise-specific data. MUST contain the required fields for the chosen type. true-false requires 'statements' array. drag-drop requires 'items' and 'categories' arrays. flipcard-quiz requires 'cards' array. timed-quiz requires 'questions' array. multiple-choice requires 'question' string and 'options' array. fill-in-blanks/complete-sentence requires 'sentences' array. scenario-selection requires 'scenarios' array. platform-match requires 'scenarios' and 'platforms' arrays. data-collection requires 'scenario' object. An EMPTY data object {} is INVALID and will be rejected.",
+                },
+              },
+              required: ["type", "title", "instruction", "data"],
+            },
+          },
+        },
+        required: ["exercises"],
+      },
+    },
+  },
+];
+
+const QUIZ_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "generate_inline_quizzes",
+      description: "Generate inline quizzes for sections that lack interactions. Each quiz tests comprehension of the section content. Vary quiz types — do NOT repeat the same type consecutively.",
+      parameters: {
+        type: "object",
+        properties: {
+          quizzes: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                afterSectionIndex: { type: "number", description: "0-based index of the section this quiz follows" },
+                quizType: { type: "string", enum: ["multiple-choice", "true-false", "fill-blank"], description: "Type of quiz. Vary types across the lesson." },
+                question: { type: "string", description: "Context question or prompt for the quiz" },
+                explanation: { type: "string" },
+                reinforcement: { type: "string" },
+                // multiple-choice fields
+                options: {
+                  type: "array",
+                  minItems: 3,
+                  maxItems: 4,
+                  items: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      isCorrect: { type: "boolean" },
+                    },
+                    required: ["text", "isCorrect"],
+                  },
+                  description: "Required for multiple-choice. Omit for other types.",
+                },
+                // true-false fields
+                statement: { type: "string", description: "Statement to judge as true or false. Required for true-false." },
+                isTrue: { type: "boolean", description: "Whether the statement is true. Required for true-false." },
+                // fill-blank fields
+                sentenceWithBlank: { type: "string", description: "Sentence with _______ as placeholder. Required for fill-blank." },
+                correctAnswer: { type: "string", description: "The correct word/phrase. Required for fill-blank." },
+                acceptableAnswers: { type: "array", items: { type: "string" }, description: "Alternative accepted answers for fill-blank." },
+                // Phase 7 (Gap 5): chip options for fill-blank
+                chipOptions: { type: "array", items: { type: "string" }, description: "4-6 chip options for fill-blank (correct + distractors). Required for fill-blank." },
+              },
+              required: ["afterSectionIndex", "quizType", "question", "explanation"],
+            },
+          },
+        },
+        required: ["quizzes"],
+      },
+    },
+  },
+];
+
+const INLINE_EXERCISE_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "generate_inline_exercises",
+      description: "Generate inline exercises for sections between content sections. Choose from 8 types per V8-C01 contract. MUST include successMessage and tryAgainMessage for each exercise.",
+      parameters: {
+        type: "object",
+        properties: {
+          exercises: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                afterSectionIndex: { type: "number", description: "0-based section index this exercise follows" },
+                type: { type: "string", enum: ["true-false", "multiple-choice", "complete-sentence", "fill-in-blanks", "flipcard-quiz", "scenario-selection", "platform-match", "timed-quiz"] },
+                title: { type: "string" },
+                instruction: { type: "string" },
+                successMessage: { type: "string", description: "Contextual congratulations shown when user passes (score >= 70). 1-2 sentences, encouraging, referencing what was learned." },
+                tryAgainMessage: { type: "string", description: "Contextual hint shown when user fails (score < 70). 1-2 sentences, encouraging retry with a specific tip." },
+                data: {
+                  type: "object",
+                  additionalProperties: true,
+                  properties: {
+                    statements: {
+                      type: "array",
+                      description: "For true-false only: [{ id, text, correct: boolean, explanation }]",
+                      items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, correct: { type: "boolean" }, explanation: { type: "string" } }, required: ["id", "text", "correct", "explanation"] }
+                    },
+                    question: {
+                      type: "string",
+                      description: "For multiple-choice: the main question text"
+                    },
+                    options: {
+                      type: "array",
+                      description: "For multiple-choice: [{ id, text, isCorrect }]",
+                      items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, isCorrect: { type: "boolean" } }, required: ["id", "text", "isCorrect"] }
+                    },
+                    sentences: {
+                      type: "array",
+                      description: "For fill-in-blanks and complete-sentence: [{ id, text (use _______ as placeholder), correctAnswers: [], options?: [], hint? }]",
+                      items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, correctAnswers: { type: "array", items: { type: "string" } }, options: { type: "array", items: { type: "string" } }, hint: { type: "string" } }, required: ["id", "text", "correctAnswers"] }
+                    },
+                    cards: {
+                      type: "array",
+                      description: "For flipcard-quiz: [{ id, front: { label, color }, back: { text }, options: [{ id, text, isCorrect }], explanation }]",
+                      items: { type: "object", properties: { id: { type: "string" }, front: { type: "object", properties: { label: { type: "string" }, color: { type: "string" } } }, back: { type: "object", properties: { text: { type: "string" } } }, options: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, isCorrect: { type: "boolean" } } } }, explanation: { type: "string" } }, required: ["id", "front", "back", "options", "explanation"] }
+                    },
+                    scenarios: {
+                      type: "array",
+                      description: "For scenario-selection: MUST include situation, options (3-4 strings), correctAnswer, explanation. For platform-match: MUST include text, correctPlatform, emoji, where correctPlatform EXACTLY matches one platforms[].id (never platform name). Items with ONLY an id are INVALID.",
+                      items: { type: "object", additionalProperties: true, properties: { id: { type: "string" }, situation: { type: "string" }, options: { type: "array", items: { type: "string" } }, correctAnswer: { type: "string" }, explanation: { type: "string" }, text: { type: "string" }, correctPlatform: { type: "string" }, emoji: { type: "string" } }, required: ["id"] }
+                    },
+                    platforms: {
+                      type: "array",
+                      description: "For platform-match only: [{ id, name, icon, color }]. Scenario.correctPlatform MUST equal platform.id.",
+                      items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, icon: { type: "string" }, color: { type: "string" } }, required: ["id", "name", "icon", "color"] }
+                    },
+                    questions: {
+                      type: "array",
+                      description: "For timed-quiz: [{ id, question, options: [{ id, text, isCorrect }], explanation }]",
+                      items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, options: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, isCorrect: { type: "boolean" } } } }, explanation: { type: "string" } }, required: ["id", "question", "options", "explanation"] }
+                    },
+                    feedback: {
+                      type: "object",
+                      description: "Feedback messages: { perfect, good, needsReview }",
+                      properties: { perfect: { type: "string" }, good: { type: "string" }, needsReview: { type: "string" } }
+                    },
+                    timePerQuestion: { type: "number", description: "For timed-quiz: seconds per question (default 15)" },
+                    bonusPerSecondLeft: { type: "number", description: "For timed-quiz: bonus points per second remaining" },
+                    timeoutPenalty: { type: "string", description: "For timed-quiz: what happens on timeout (default 'skip')" },
+                    visualTheme: { type: "string", description: "For timed-quiz: visual theme (default 'cyber')" }
+                  },
+                  description: "Exercise-specific data. MUST contain the required fields for the chosen type. true-false → 'statements'. multiple-choice → 'question' and 'options'. fill-in-blanks/complete-sentence → 'sentences'. flipcard-quiz → 'cards'. scenario-selection → 'scenarios'. platform-match → 'scenarios' AND 'platforms'. timed-quiz → 'questions'. An EMPTY data object {} is INVALID.",
+                },
+              },
+              required: ["afterSectionIndex", "type", "title", "instruction", "data", "successMessage", "tryAgainMessage"],
+            },
+          },
+        },
+        required: ["exercises"],
+      },
+    },
+  },
+];
+
+const PLAYGROUND_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "generate_inline_playgrounds",
+      description: "Generate inline playgrounds for sections where practical prompt exercise makes sense.",
+      parameters: {
+        type: "object",
+        properties: {
+          playgrounds: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                afterSectionIndex: { type: "number" },
+                title: { type: "string" },
+                instruction: { type: "string", minLength: 40 },
+                amateurPrompt: { type: "string" },
+                professionalPrompt: { type: "string" },
+                successMessage: { type: "string" },
+                tryAgainMessage: { type: "string" },
+                amateurResult: { type: "string", description: "Short, vague, weak result from the amateur prompt — MAX 2 lines" },
+                professionalResult: { type: "string", description: "Detailed, specific, strong result from the professional prompt — 3-5 lines" },
+                userChallenge: {
+                  type: "object",
+                  properties: {
+                    instruction: { type: "string" },
+                    challengePrompt: { type: "string" },
+                    hints: { type: "array", items: { type: "string" }, maxItems: 3 },
+                    evaluationCriteria: { type: "array", items: { type: "string" } },
+                  },
+                  required: ["instruction", "challengePrompt", "hints", "evaluationCriteria"],
+                },
+              },
+              required: ["afterSectionIndex", "title", "instruction", "amateurPrompt", "professionalPrompt", "amateurResult", "professionalResult", "successMessage", "tryAgainMessage"],
+            },
+          },
+        },
+        required: ["playgrounds"],
+      },
+    },
+  },
+];
+
+// ─── System prompt for exercise selection ───
+const EXERCISE_SYSTEM_PROMPT = `Você é um designer instrucional especializado em educação sobre Inteligência Artificial e renda extra.
+
+Sua tarefa é analisar o conteúdo das seções de uma aula e gerar exercícios finais que testem o conhecimento de forma interativa.
+
+REGRAS:
+1. Gere entre 2 e 4 exercícios
+2. VARIE os tipos — não repita o mesmo tipo
+3. Priorize tipos interativos (drag-drop, flipcard-quiz, platform-match, timed-quiz) sobre texto puro (multiple-choice)
+4. O conteúdo deve ser em Português Brasileiro (pt-BR)
+5. Cada exercício deve testar conhecimento real da aula, não perguntas genéricas
+
+MAPEAMENTO CONTEXTO → TIPO:
+- Categorias, classificações → drag-drop
+- Plataformas, ferramentas para combinar → platform-match
+- Afirmações para validar → true-false
+- Conceitos-chave para memorizar → flipcard-quiz
+- Definições com lacunas → fill-in-blanks ou complete-sentence
+- Cenários de decisão → scenario-selection
+- Dados para analisar → data-collection
+- Perguntas diretas → multiple-choice
+- Revisão rápida com pressão → timed-quiz
+
+🚦 MÍNIMOS PEDAGÓGICOS OBRIGATÓRIOS (NÃO VIOLE):
+- platform-match: SOMENTE se a aula compara 2+ ferramentas/plataformas DISTINTAS. Se a aula é sobre 1 única ferramenta (ex: só Midjourney), use multiple-choice ou drag-drop com parâmetros como categorias. NUNCA gere platform-match com 1 plataforma só — isso destrói a pedagogia (aluno acerta tudo no piloto automático).
+- multiple-choice: mínimo 3 opções (1 correta + 2 distratores plausíveis). 2 opções vira pseudo-true-false sem nuance.
+- true-false: mínimo 2 statements (caso contrário não há contraste).
+- drag-drop: mínimo 2 categorias e 3 itens.
+- flipcard-quiz: mínimo 2 cards.
+- timed-quiz: mínimo 2 questões.
+
+SCHEMAS POR TIPO:
+
+drag-drop: { items: [{ id, text, category }], categories: [{ id, title }], feedback: { correct, incorrect } }
+fill-in-blanks: { sentences: [{ id, text (use _______ como placeholder), correctAnswers: [], hint }], feedback: { allCorrect, someCorrect, needsReview } }
+scenario-selection: { scenarios: [{ id, situation (máx 80 chars), options: [] (cada opção máx 50 chars), correctAnswer, explanation }] }
+true-false: { statements: [{ id, text, correct: boolean, explanation }], feedback: { perfect, good, needsReview } }
+ platform-match: { scenarios: [{ id, text (máx 60 chars), correctPlatform, emoji }], platforms: [{ id, name (máx 40 chars — use nomes curtos como "Verificar fontes", NÃO frases longas), icon, color }] }. IMPORTANTE: correctPlatform DEVE corresponder EXATAMENTE a um platforms[].id (nunca ao name). platform.name deve ser CURTO (rótulo de botão, não uma frase completa).
+data-collection: { scenario: { id, emoji, platform, situation, dataPoints: [{ id, label, isCorrect, explanation }], context } }
+complete-sentence: { sentences: [{ id, text (use _______ como placeholder, máx 80 chars por frase), correctAnswers: [] (cada resposta máx 30 chars), options: [] (cada opção máx 30 chars, máx 4 opções) }] }. IMPORTANTE: frases curtas e diretas para UX mobile compacta.
+multiple-choice: { question, options: [], correctAnswer, explanation }
+flipcard-quiz: { cards: [{ id, front: { label, color }, back: { text }, options: [{ id, text, isCorrect }], explanation }] }
+timed-quiz: { timePerQuestion: 15, bonusPerSecondLeft: 2, timeoutPenalty: "skip", visualTheme: "cyber", questions: [{ id, question, options: [{ id, text, isCorrect }], explanation }] }
+
+Gere IDs únicos para todos os elementos (ex: "item-1", "cat-1", "stmt-1").`;
+
+const QUIZ_SYSTEM_PROMPT = `Você é um designer instrucional. Gere quizzes inline para seções de aula que NÃO possuem interações.
+Cada quiz deve:
+- Ter explicação clara
+- Ter reinforcement (texto extra mostrado ao errar)
+- Estar em Português Brasileiro (pt-BR)
+- NUNCA referencie números de seção na pergunta (ex: "De acordo com a Seção 0", "conforme a Seção 1", "na Seção 3"). A pergunta deve ser autocontida e compreensível sem contexto de numeração.
+- A pergunta NÃO deve mencionar "seção", "seções", "de acordo com", "conforme" seguido de referência numérica.
+
+TAGS EMOCIONAIS (OBRIGATÓRIO para narração TTS):
+- Inclua tags emocionais ElevenLabs nos campos "question", "explanation" e "reinforcement" para tornar a narração mais natural e engajante.
+- Tags disponíveis: [excited], [calm], [thoughtful], [encouraging], [curious], [cheerful], [serious], [reflective], [pause]
+- Exemplo: "[curious] Você sabe qual é a diferença entre um prompt genérico e um profissional? [pause] Pense bem antes de responder."
+- Exemplo de explanation: "[cheerful] Isso mesmo! [thoughtful] A especificidade é a chave para resultados melhores."
+- Exemplo de reinforcement: "[encouraging] Quase lá! [calm] Vamos revisar esse conceito juntos."
+- Use 1-2 tags por campo, no início ou entre frases. Não exagere.
+
+PROIBIÇÕES:
+- NUNCA gere subtítulos, labels ou metadados como "Segmento vida real desta atividade: X", "Atividade prática:", "Contexto real:" ou qualquer rótulo meta-narrativo. O quiz deve ir DIRETO ao conteúdo sem labels de categorização.
+
+VARIEDADE DE TIPOS (OBRIGATÓRIO):
+- VARIE os tipos de quiz. NÃO repita o mesmo tipo consecutivamente.
+- Use "true-false" quando o conteúdo tem afirmações que podem ser validadas como verdadeiras ou falsas. Preencha "statement" e "isTrue".
+- Use "fill-blank" quando o conteúdo tem definições ou frases-chave que o aluno deve completar. Preencha "sentenceWithBlank" (com _______), "correctAnswer", "acceptableAnswers" e "chipOptions".
+- Use "multiple-choice" como padrão para perguntas de compreensão geral. Preencha "options" com 3-4 opções (exatamente 1 correta).
+- Em uma aula com 3+ quizzes, use pelo menos 2 tipos diferentes.
+
+REGRAS POR TIPO:
+- multiple-choice: "options" é obrigatório (3-4 opções, 1 correta)
+- true-false: "statement" e "isTrue" são obrigatórios. NÃO preencha "options".
+- fill-blank: "sentenceWithBlank", "correctAnswer", "acceptableAnswers" e "chipOptions" são obrigatórios. NÃO preencha "options". O campo "question" deve conter apenas uma instrução de engajamento como "Complete a frase abaixo", NUNCA a frase com lacuna. Gere "chipOptions" com 4-6 opções incluindo a correta e distratoras plausíveis.`;
+
+const PLAYGROUND_SYSTEM_PROMPT = `Você é um designer instrucional especializado em prompts de IA.
+Gere UM playground para a ÚLTIMA seção da aula onde o aluno pratica escrevendo prompts.
+O playground deve:
+- Comparar um prompt amador vs profissional
+- O resultado amador (amateurResult) DEVE ser curto, vago, genérico e visivelmente fraco — máximo 2 linhas. Exemplo: "A natureza é bonita e importante." NÃO gere resultados amadores elaborados com poemas, listas ou parágrafos longos.
+- O resultado profissional (professionalResult) deve ser detalhado, específico e visivelmente superior ao amador — 3-5 linhas com exemplos concretos.
+- Ter instrução com pelo menos 40 caracteres
+- Ter desafio para o usuário escrever seu próprio prompt
+- Estar em Português Brasileiro (pt-BR)
+- Ter hints e critérios de avaliação
+
+TAGS EMOCIONAIS (OBRIGATÓRIO para narração TTS):
+- Inclua tags emocionais ElevenLabs no campo "narration", "successMessage" e "tryAgainMessage" para tornar a narração TTS mais natural.
+- Tags disponíveis: [excited], [calm], [thoughtful], [encouraging], [curious], [cheerful], [serious], [pause]
+- Exemplo narration: "[excited] Agora é a sua vez de brilhar! [thoughtful] Vou te mostrar dois prompts e você vai entender a diferença na prática."
+- Exemplo successMessage: "[cheerful] Parabéns! [excited] Seu prompt ficou muito bom!"
+- Exemplo tryAgainMessage: "[encouraging] Quase lá! [calm] Tente ser mais específico no seu prompt."
+- Use 1-2 tags por campo, posicionadas naturalmente no início ou entre frases.
+
+PROIBIÇÕES:
+- NUNCA gere subtítulos, labels ou metadados como "Segmento vida real desta atividade: X", "Atividade prática:", "Contexto real:" ou qualquer rótulo meta-narrativo.
+- NUNCA use tom apressado no enunciado. Proibido: "Responda rapidamente", "confie no seu instinto", "você tem pouco tempo", "sem pensar muito", "responda agora". Essas frases são anti-pedagógicas.
+
+CONGRUÊNCIA GRAMATICAL OBRIGATÓRIA:
+- Todos os textos gerados (prompts, resultados, instruções) DEVEM ter concordância sujeito-verbo correta.
+- ERRO CLÁSSICO: "Sou um casal" → CORRETO: "Somos um casal". Se o sujeito é coletivo/plural, o verbo DEVE concordar.
+- Outros exemplos de erros proibidos: "Nós é" → "Nós somos", "A gente vamos" → "A gente vai", "Eu e minha esposa vai" → "Eu e minha esposa vamos".
+- Revise CADA frase gerada para garantir concordância nominal e verbal antes de retornar.
+- Essa regra se aplica a QUALQUER idioma mencionado nos exemplos (pt-BR, en, es, etc.).
+
+TOM OBRIGATÓRIO:
+- O enunciado deve guiar o aluno a PENSAR e ANALISAR antes de agir.
+- Use frases como: "Analise o cenário abaixo", "Observe como...", "Teste sua habilidade aplicando as técnicas desta aula", "Compare os dois prompts e identifique...".
+- O playground é um exercício de reflexão aplicada, não uma prova relâmpago.`;
+
+const INLINE_EXERCISE_SYSTEM_PROMPT = `Você é um designer instrucional especializado em educação sobre I.A.
+Gere exercícios interativos inline para seções intermediárias de uma aula.
+
+REGRAS:
+1. Gere EXATAMENTE o tipo solicitado para cada seção — o tipo é obrigatório e definido pelo contrato V8-C01.
+2. Use Português Brasileiro (pt-BR)
+3. Cada exercício deve testar conhecimento real da seção correspondente
+4. NÃO referencie números de seção na pergunta
+
+PROIBIÇÕES:
+- NUNCA gere subtítulos, labels ou metadados como "Segmento vida real desta atividade: X", "Atividade prática:", "Contexto real:" ou qualquer rótulo meta-narrativo. Vá DIRETO ao exercício.
+- Todos os textos DEVEM ter concordância gramatical correta (sujeito-verbo, gênero-número). Ex: "Sou um casal" é ERRADO → "Somos um casal".
+
+REGRA CRÍTICA — MÍNIMO DE OPÇÕES (OBRIGATÓRIO):
+- Exercícios com opções (multiple-choice, flipcard-quiz, timed-quiz) DEVEM ter NO MÍNIMO 3 opções por pergunta/card, com EXATAMENTE 1 correta.
+- true-false: MÍNIMO 3 statements por exercício, cada um com id, text, correct (boolean) e explanation.
+- scenario-selection: MÍNIMO 3 options por cenário, com correctAnswer correspondendo EXATAMENTE a uma delas.
+- platform-match: MÍNIMO 3 scenarios + MÍNIMO 3 platforms.
+- fill-in-blanks: MÍNIMO 2 sentences, cada uma com correctAnswers[], hint e text com _______.
+- complete-sentence: MÍNIMO 2 sentences, cada uma com text, correctAnswers[] e options[] (4 opções com a correta incluída).
+- Um exercício com APENAS 1 opção ou 1 statement é INVÁLIDO e será REJEITADO.
+
+TIPOS DISPONÍVEIS E SCHEMAS:
+- true-false: { statements: [{ id: "stmt-1", text: "afirmação", correct: true/false, explanation: "..." }, ...MIN 3], feedback: { perfect: "...", good: "...", needsReview: "..." } }
+- fill-in-blanks: { sentences: [{ id: "sent-1", text: "Frase com _______ placeholder", correctAnswers: ["resposta"], hint: "dica" }, ...MIN 2], feedback: { allCorrect: "...", someCorrect: "...", needsReview: "..." } }
+- complete-sentence: { sentences: [{ id: "sent-1", text: "Frase curta com _______ placeholder (máx 80 chars)", correctAnswers: ["resposta (máx 30 chars)"], options: ["opção1 (máx 30 chars)", "opção2", "opção3", "resposta"] }, ...MIN 2] }. IMPORTANTE: frases curtas e opções concisas para UX mobile compacta. Máx 4 opções.
+- multiple-choice: { question: "pergunta clara sobre o conceito", options: [{ id: "opt-1", text: "alternativa A", isCorrect: true }, { id: "opt-2", text: "alternativa B", isCorrect: false }, { id: "opt-3", text: "alternativa C", isCorrect: false }...MIN 3], explanation: "explicação da resposta correta", feedback: { perfect: "...", good: "...", needsReview: "..." } }
+- flipcard-quiz: { cards: [{ id: "card-1", front: { label: "Conceito X", color: "#6366f1" }, back: { text: "explicação" }, options: [{ id: "opt-1", text: "opção", isCorrect: true/false }...MIN 3 por card], explanation: "..." }, ...MIN 2 cards] }
+- scenario-selection: { scenarios: [{ id: "sc-1", situation: "descrição do cenário (máx 80 chars)", options: ["opção curta A (máx 50 chars)", "opção curta B", "opção curta C"...MIN 3], correctAnswer: "opção curta A", explanation: "..." }] }. IMPORTANTE: as options devem ser CURTAS (máx 50 caracteres cada) para caber em telas mobile. A situation também deve ser concisa (máx 80 chars).
+- platform-match: { scenarios: [{ id: "pm-1", text: "caso de uso (máx 60 chars)", correctPlatform: "ChatGPT", emoji: "🤖" }...MIN 3], platforms: [{ id: "plat-1", name: "ChatGPT", icon: "🤖", color: "#10a37f" }...MIN 3] }. IMPORTANTE: platform.name DEVE ser um rótulo curto (máx 40 chars).
+- timed-quiz: { timePerQuestion: 15, bonusPerSecondLeft: 2, timeoutPenalty: "skip", visualTheme: "cyber", questions: [{ id: "tq-1", question: "pergunta", options: [{ id: "tqo-1", text: "opção", isCorrect: true/false }...MIN 3 por question], explanation: "..." }...MIN 2] }
+
+Gere IDs únicos para todos os elementos.
+Gere 2-3 statements/sentences/cards/questions por exercício.
+
+COMPACIDADE MOBILE (OBRIGATÓRIO):
+- Todos os textos de opções/alternativas devem ter NO MÁXIMO 50 caracteres. Textos longos quebram o layout mobile.
+- Situations e descriptions devem ter NO MÁXIMO 80 caracteres.
+- Títulos de exercícios devem ter NO MÁXIMO 40 caracteres.
+- Prefira frases diretas e objetivas. Evite descrições longas ou rebuscadas.
+
+FEEDBACK OBRIGATÓRIO:
+- CADA exercício DEVE ter "successMessage" (parabéns contextual, 1-2 frases) e "tryAgainMessage" (dica para tentar novamente, 1-2 frases).
+- O successMessage deve referenciar o conceito testado. Ex: "Ótimo! Você dominou a diferença entre prompts vagos e específicos."
+- O tryAgainMessage deve dar uma dica concreta. Ex: "Quase lá! Releia a seção sobre estrutura de prompts e tente novamente."
+- NUNCA deixe esses campos vazios.`;
+
+// ─── Coursiv Prompt Builder: tool schema + system prompt ───
+const COURSIV_BUILDER_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "generate_coursiv_exercise",
+      description: "Generate ONE Coursiv exercise: a SINGLE sentence/prompt with EXACTLY 4 inline blanks (max 20 words). Chips = only the 4 correct answers (NO distractors).",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Short title like 'Monte o Prompt Profissional'" },
+          instruction: { type: "string", description: "Instruction like 'Complete o prompt organizando as palavras que faltam no seu contexto.'" },
+          sentences: {
+            type: "array",
+            minItems: 1,
+            maxItems: 1,
+            description: "EXACTLY 1 sentence object with EXACTLY 4 blanks and max 20 words total.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                text: { type: "string", description: "ONE prompt sentence with EXACTLY 4 _______ placeholders and NO MORE than 20 words total (each _______ counts as 1 word). Example: 'Crie um _______ para um _______ que precisa de resultados no formato _______ com tom _______'" },
+                correctAnswers: {
+                  type: "array",
+                  minItems: 4,
+                  maxItems: 4,
+                  items: { type: "string" },
+                  description: "EXACTLY 4 ordered correct words/phrases for each blank. Example: ['roteiro', 'empresas', 'lista', 'persuasivo']"
+                },
+              },
+              required: ["id", "text", "correctAnswers"],
+            },
+          },
+        },
+        required: ["title", "instruction", "sentences"],
+      },
+    },
+  },
+];
+
+const COURSIV_SYSTEM_PROMPT = `Você é um designer instrucional especializado em construção de prompts de IA.
+
+Sua tarefa é gerar UM único exercício Coursiv para a sessão 8.
+
+FORMATO OBRIGATÓRIO:
+- Gere EXATAMENTE 1 frase (um prompt completo) com EXATAMENTE 4 lacunas (_______) embutidas inline.
+- A frase deve ter NO MÁXIMO 20 palavras no total (cada _______ conta como 1 palavra).
+- A frase deve parecer um prompt real que o aluno usaria com ChatGPT, Gemini ou outra IA.
+- Cada lacuna representa um componente estrutural: objetivo, público-alvo, contexto, formato, tom, restrição, etc.
+- Use conectores e contexto entre as lacunas para criar uma frase rica e realista (preposições, orações relativas, etc.).
+
+EXEMPLO DE FORMATO:
+text: "Crie um _______ para um _______ que precisa de resultados no formato _______ com tom _______"
+correctAnswers: ["roteiro", "empreendedor digital", "lista prática", "persuasivo"]
+
+REGRAS:
+1. sentences deve ter EXATAMENTE 1 item.
+2. O campo text deve conter EXATAMENTE 4 placeholders _______ (use exatamente 7 underscores). NÃO gere 3, 5 ou 6 lacunas.
+3. A frase deve ter NO MÁXIMO 20 palavras (incluindo os placeholders como palavras). Conte: "Crie um _______ para um _______ que precisa de resultados no formato _______ com tom _______" = 15 palavras. OK.
+4. correctAnswers: array com EXATAMENTE 4 palavras/frases corretas, na mesma ordem das lacunas no texto.
+5. NÃO gere o campo options. Os chips exibidos serão APENAS as 4 respostas corretas em ordem embaralhada.
+6. As respostas corretas devem ser curtas (1-2 palavras cada).
+7. Use Português Brasileiro (pt-BR).
+
+REGRA CRÍTICA — PALAVRAS PROIBIDAS:
+- PROIBIDO usar conceitos fora de domínio como: café, bolo, receita, árvores, carros, poeta, clima, fonte tipográfica, imagens decorativas, planetas, exercícios físicos, filmes, música, esportes, animais, comida, viagem, moda.`;
+
+async function callAI(
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string,
+  tools: any[],
+  toolName: string,
+  options?: { retryOnTruncation?: boolean },
+): Promise<any> {
+  const TIMEOUT_MS = 90_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        tools,
+        tool_choice: { type: "function", function: { name: toolName } },
+        max_tokens: 8192,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      if (response.status === 429) throw new Error("RATE_LIMIT: Too many requests. Try again later.");
+      if (response.status === 402) throw new Error("CREDITS_EXHAUSTED: Add funds in Settings → Workspace → Usage.");
+      throw new Error(`AI Gateway error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json();
+
+    // Fix 5: Log finish_reason for diagnostics
+    const finishReason = data.choices?.[0]?.finish_reason;
+    console.log(`[callAI] toolName=${toolName}, finish_reason=${finishReason}, choices=${data.choices?.length}`);
+
+    // Fix 3: Detect truncation — retry once for exercises if finish_reason is "length"
+    if (finishReason === "length") {
+      console.warn(`[callAI] TRUNCATION DETECTED for ${toolName}. finish_reason=length`);
+      if (options?.retryOnTruncation) {
+        console.log(`[callAI] Retrying ${toolName} once due to truncation...`);
+        clearTimeout(timer);
+        return callAI(apiKey, systemPrompt, userPrompt, tools, toolName, { retryOnTruncation: false });
+      }
+      throw new Error(`AI_TRUNCATED: Response was truncated (finish_reason=length) for ${toolName}. Data may be incomplete.`);
+    }
+
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall) throw new Error("AI did not return tool call");
+
+    // Fix 4: Validate arguments are not empty
+    const rawArgs = toolCall.function.arguments;
+    if (!rawArgs || rawArgs === "{}" || rawArgs === "null" || rawArgs.trim() === "") {
+      throw new Error(`AI_EMPTY_ARGS: tool_call for ${toolName} returned empty arguments: "${rawArgs}"`);
+    }
+
+    const parsed = JSON.parse(rawArgs);
+
+    // Fix 4b: Validate parsed result has at least one meaningful key
+    if (typeof parsed === "object" && parsed !== null && Object.keys(parsed).length === 0) {
+      throw new Error(`AI_EMPTY_OBJECT: tool_call for ${toolName} returned empty object after parse`);
+    }
+
+    return parsed;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(`AI_TIMEOUT: callAI for ${toolName} timed out after ${TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function generateImages(
+  sections: Array<{ title: string; content: string }>,
+  lessonId: string,
+  supabaseUrl: string,
+  authHeader: string,
+  apiKey: string,
+): Promise<Array<{ index: number; imageUrl?: string; error?: string }>> {
+  const results: Array<{ index: number; imageUrl?: string; error?: string }> = [];
+  
+  // Generate images sequentially to avoid rate limits
+  for (let i = 0; i < sections.length; i++) {
+    try {
+      const response = await fetch(`${supabaseUrl}/functions/v1/v8-generate-section-image`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: authHeader,
+          apikey: apiKey,
+        },
+        body: JSON.stringify({
+          mode: "auto",
+          content: sections[i].content,
+          lessonId,
+          sectionIndex: i,
+          sectionTitle: sections[i].title,
+          allowText: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        results.push({ index: i, error: `HTTP ${response.status}: ${errText}` });
+        continue;
+      }
+
+      const data = await response.json();
+      results.push({ index: i, imageUrl: data.imageUrl });
+    } catch (err) {
+      results.push({ index: i, error: err instanceof Error ? err.message : "Unknown error" });
+    }
+  }
+
+  return results;
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    let {
+      sections,
+      manualQuizzes = [],
+      manualPlaygrounds = [],
+      manualExercises = [],
+      generateImages: shouldGenerateImages = false,
+      lessonTitle = "Aula",
+      orderIndex = 0,
+      contractPattern: requestedPattern,
+      courseId,
+    } = await req.json();
+
+    if (!sections || !Array.isArray(sections) || sections.length === 0) {
+      return new Response(JSON.stringify({ error: "sections[] is required and must be non-empty" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    sections = sections.map((s: any) => ({
+      ...s,
+      title: sanitizeV8Text(String(s?.title || '')),
+      content: sanitizeV8Text(String(s?.content || '')),
+    }));
+
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authHeader = req.headers.get("authorization") || `Bearer ${supabaseAnonKey}`;
+
+    const progress: string[] = [];
+    const errors: string[] = [];
+
+    // Build content summary for AI
+    const contentSummary = sections.map((s: any, i: number) => 
+      `### Seção ${i + 1}: ${s.title}\n${s.content?.slice(0, 500) || ""}`
+    ).join("\n\n");
+
+    // ── 1. V8-C01 Contract: Deterministic section-interaction map ──
+    const sectionsWithQuiz = new Set(manualQuizzes.map((q: any) => q.afterSectionIndex));
+    const sectionsWithPlayground = new Set(manualPlaygrounds.map((p: any) => p.afterSectionIndex));
+    const lastIdx = sections.length - 1;
+    const coursivTargetIdx = lastIdx >= 4 ? lastIdx - 1 : -1;
+
+    // V8 contract: 3 interaction patterns rotated by orderIndex
+    // Sections 0-1: no interaction (introductory)
+    // Sections 2-6: mapped types (random pick from pool)
+    // lastIdx-1: Coursiv (handled separately)
+    // lastIdx: Playground (handled separately)
+    const V8_C01_MAP: Record<number, string[]> = {
+      2: ['multiple-choice', 'flipcard-quiz', 'scenario-selection'],
+      3: ['complete-sentence', 'scenario-selection', 'fill-in-blanks'],
+      4: ['true-false', 'fill-in-blanks', 'multiple-choice'],
+      5: ['platform-match', 'scenario-selection', 'timed-quiz'],
+      6: ['timed-quiz', 'fill-in-blanks', 'complete-sentence'],
+    };
+    const V8_C02_MAP: Record<number, string[]> = {
+      2: ['scenario-selection', 'true-false', 'flipcard-quiz'],
+      3: ['flipcard-quiz', 'platform-match', 'complete-sentence'],
+      4: ['fill-in-blanks', 'multiple-choice', 'true-false'],
+      5: ['timed-quiz', 'complete-sentence', 'scenario-selection'],
+      6: ['true-false', 'flipcard-quiz', 'platform-match'],
+    };
+    const V8_C03_MAP: Record<number, string[]> = {
+      2: ['flipcard-quiz', 'fill-in-blanks', 'multiple-choice'],
+      3: ['timed-quiz', 'true-false', 'scenario-selection'],
+      4: ['scenario-selection', 'platform-match', 'complete-sentence'],
+      5: ['multiple-choice', 'complete-sentence', 'flipcard-quiz'],
+      6: ['fill-in-blanks', 'scenario-selection', 'timed-quiz'],
+    };
+
+    // ─── V8-B* Maps (compact: 7 seções, exercícios em índices 2-4 apenas) ───
+    const V8_B01_MAP: Record<number, string[]> = {
+      2: ['scenario-selection', 'flipcard-quiz', 'multiple-choice'],
+      3: ['true-false', 'timed-quiz', 'fill-in-blanks'],
+      4: ['platform-match', 'fill-in-blanks', 'complete-sentence'],
+    };
+    const V8_B02_MAP: Record<number, string[]> = {
+      2: ['timed-quiz', 'multiple-choice', 'flipcard-quiz'],
+      3: ['platform-match', 'flipcard-quiz', 'scenario-selection'],
+      4: ['scenario-selection', 'complete-sentence', 'true-false'],
+    };
+    const V8_B03_MAP: Record<number, string[]> = {
+      2: ['flipcard-quiz', 'scenario-selection', 'timed-quiz'],
+      3: ['fill-in-blanks', 'timed-quiz', 'platform-match'],
+      4: ['true-false', 'platform-match', 'multiple-choice'],
+    };
+
+    const PATTERN_MAPS: Record<string, Record<number, string[]>> = {
+      'V8-C01': V8_C01_MAP,
+      'V8-C02': V8_C02_MAP,
+      'V8-C03': V8_C03_MAP,
+      'V8-B01': V8_B01_MAP,
+      'V8-B02': V8_B02_MAP,
+      'V8-B03': V8_B03_MAP,
+    };
+    const patternNames = ['V8-C01', 'V8-B01', 'V8-C02', 'V8-B02', 'V8-C03', 'V8-B03'] as const;
+    // Hash-based pattern selection: uses lessonTitle chars for better distribution
+    const titleHash = lessonTitle.split('').reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
+    const selectedPattern = requestedPattern || patternNames[titleHash % patternNames.length];
+    const isCompactPattern = selectedPattern.startsWith('V8-B');
+    const activeMap = PATTERN_MAPS[selectedPattern] || V8_C01_MAP;
+    console.log(`[v8-generate] Pattern: ${selectedPattern} (orderIndex=${orderIndex})`);
+
+    // ── Pedagogical angle per pattern (varies question framing, not type) ──
+    const PEDAGOGICAL_ANGLES: Record<string, string> = {
+      'V8-C01': `ÂNGULO PEDAGÓGICO — IDENTIFICAÇÃO:
+Formule perguntas que testem se o aluno IDENTIFICA o conceito correto entre opções.
+Verbos obrigatórios: identificar, reconhecer, distinguir, apontar.
+Exemplo de pergunta: "Qual destes é um exemplo de prompt específico?"
+IMPORTANTE: O TIPO do exercício é definido pelo campo TIPO OBRIGATÓRIO. Você só muda o ÂNGULO e a FORMULAÇÃO da pergunta, nunca o tipo do widget.`,
+      'V8-C02': `ÂNGULO PEDAGÓGICO — APLICAÇÃO PRÁTICA:
+Formule perguntas com CENÁRIO REAL que testem se o aluno sabe APLICAR o conceito na prática.
+Comece SEMPRE com uma situação: "Você precisa...", "Seu cliente pediu...", "Imagine que...", "No seu trabalho...".
+Exemplo de pergunta: "Você precisa criar um cardápio para um restaurante. Qual prompt gera o melhor resultado?"
+IMPORTANTE: O TIPO do exercício é definido pelo campo TIPO OBRIGATÓRIO. Você só muda o ÂNGULO e a FORMULAÇÃO da pergunta, nunca o tipo do widget.`,
+      'V8-C03': `ÂNGULO PEDAGÓGICO — ERRO COMUM:
+Formule perguntas que apresentem algo INCORRETO ou SUBÓTIMO para o aluno detectar o ERRO ou a armadilha.
+Use frases como: "O que está errado em...", "Qual o problema de...", "Por que este prompt falha?", "Identifique a falha...".
+Exemplo de pergunta: "Este prompt parece bom, mas tem um erro comum. Qual é?"
+IMPORTANTE: O TIPO do exercício é definido pelo campo TIPO OBRIGATÓRIO. Você só muda o ÂNGULO e a FORMULAÇÃO da pergunta, nunca o tipo do widget.`,
+      'V8-B01': `ÂNGULO PEDAGÓGICO — COMPARAÇÃO:
+Formule perguntas que peçam ao aluno COMPARAR duas abordagens, ferramentas ou resultados.
+Use frases como: "Compare X com Y", "Qual a diferença entre...", "Qual abordagem gera melhor resultado?", "O que muda quando..."
+Tom: direto, provocativo, sem rodeios.
+IMPORTANTE: O TIPO do exercício é definido pelo campo TIPO OBRIGATÓRIO. Você só muda o ÂNGULO e a FORMULAÇÃO da pergunta, nunca o tipo do widget.`,
+      'V8-B02': `ÂNGULO PEDAGÓGICO — DEBATE:
+Formule perguntas que apresentem DOIS LADOS de uma questão para o aluno defender ou refutar.
+Use frases como: "Defenda ou refute:", "Qual lado você escolhe?", "Um colega disse X — você concorda?", "Argumente a favor ou contra..."
+Tom: provocativo, estimulando pensamento crítico.
+IMPORTANTE: O TIPO do exercício é definido pelo campo TIPO OBRIGATÓRIO. Você só muda o ÂNGULO e a FORMULAÇÃO da pergunta, nunca o tipo do widget.`,
+      'V8-B03': `ÂNGULO PEDAGÓGICO — PROVOCAÇÃO:
+Formule perguntas que DESAFIEM crenças comuns ou erros populares sobre o tema.
+Use frases como: "E se eu te dissesse que...", "A maioria erra porque...", "Parece óbvio, mas...", "Mito ou verdade?"
+Tom: ousado, contra-intuitivo, memorável.
+IMPORTANTE: O TIPO do exercício é definido pelo campo TIPO OBRIGATÓRIO. Você só muda o ÂNGULO e a FORMULAÇÃO da pergunta, nunca o tipo do widget.`,
+    };
+    const angleInstruction = PEDAGOGICAL_ANGLES[selectedPattern] || PEDAGOGICAL_ANGLES['V8-C01'];
+
+    // Build interaction assignments for this lesson
+    // Manual exercise markers override V8_C01_MAP pool when present
+    const manualExerciseMap = new Map<number, string>();
+    if (Array.isArray(manualExercises)) {
+      for (const me of manualExercises) {
+        if (me && typeof me.afterSectionIndex === 'number' && typeof me.type === 'string') {
+          manualExerciseMap.set(me.afterSectionIndex, me.type);
+        }
+      }
+    }
+    if (manualExerciseMap.size > 0) {
+      console.log(`[v8-generate] Manual exercise overrides: ${[...manualExerciseMap.entries()].map(([k, v]) => `S${k}→${v}`).join(', ')}`);
+    }
+
+    // ── Cross-lesson anti-repetition: blacklist first exercise types from neighbor lessons ──
+    let neighborBlacklist: string[] = [];
+    if (courseId) {
+      try {
+        const supabaseClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        const { data: neighbors } = await supabaseClient
+          .from('lessons')
+          .select('content')
+          .eq('course_id', courseId)
+          .eq('is_active', true)
+          .order('order_index', { ascending: false })
+          .limit(3);
+        neighborBlacklist = (neighbors || [])
+          .map((n: any) => {
+            const inlineEx = n.content?.inlineExercises;
+            return Array.isArray(inlineEx) && inlineEx.length > 0 ? inlineEx[0]?.type : null;
+          })
+          .filter(Boolean);
+        if (neighborBlacklist.length > 0) {
+          console.log(`[v8-generate] Cross-lesson blacklist (first exercise types from last 3 lessons): ${neighborBlacklist.join(', ')}`);
+        }
+      } catch (err) {
+        console.warn(`[v8-generate] Cross-lesson lookup failed (non-fatal):`, err);
+      }
+    }
+
+    const interactionAssignments: Array<{ sectionIndex: number; type: string }> = [];
+    const usedTypes = new Set<string>(); // Global anti-repetition within lesson
+    for (let i = 2; i < sections.length; i++) {
+      // Skip if section has manual quiz/playground, or is reserved for Coursiv/Playground
+      if (sectionsWithQuiz.has(i) || sectionsWithPlayground.has(i)) continue;
+      if (i === coursivTargetIdx || i === lastIdx) continue;
+
+      // Priority: manual marker > contract map pool
+      const manualType = manualExerciseMap.get(i);
+      if (manualType) {
+        interactionAssignments.push({ sectionIndex: i, type: manualType });
+        usedTypes.add(manualType);
+        continue;
+      }
+
+      const pool = activeMap[i];
+      if (!pool) continue; // No mapping for this index
+
+      // Anti-repetition: avoid any type already used in THIS lesson
+      let selectedType = pool[Math.floor(Math.random() * pool.length)];
+      if (usedTypes.has(selectedType) && pool.length > 1) {
+        const alternative = pool.find(t => !usedTypes.has(t));
+        if (alternative) selectedType = alternative;
+      }
+      // Cross-lesson: for the FIRST exercise slot, also avoid neighbor types
+      if (interactionAssignments.length === 0 && neighborBlacklist.includes(selectedType) && pool.length > 1) {
+        const crossAlt = pool.find(t => !neighborBlacklist.includes(t) && !usedTypes.has(t));
+        if (crossAlt) selectedType = crossAlt;
+      }
+      usedTypes.add(selectedType);
+      interactionAssignments.push({ sectionIndex: i, type: selectedType });
+    }
+
+    console.log(`[v8-generate-lesson-content] ${selectedPattern} map: ${interactionAssignments.map(a => `S${a.sectionIndex}→${a.type}`).join(', ')}${coursivTargetIdx >= 0 ? ` | Coursiv→S${coursivTargetIdx}` : ''} | Playground→S${lastIdx}`);
+
+    // ── 2. Generate inline exercises via unified pipeline (V8-C01) ──
+    let generatedQuizzes: any[] = []; // Empty — quizzes are now unified into inlineExercises
+    let generatedInlineExercises: any[] = [];
+    if (interactionAssignments.length > 0) {
+      progress.push(`Gerando exercícios inline (${selectedPattern}, ângulo: ${selectedPattern.replace('V8-', '')})...`);
+      try {
+        const assignmentPrompt = interactionAssignments.map(a => {
+          const section = sections[a.sectionIndex];
+          return `Seção ${a.sectionIndex} (index ${a.sectionIndex}): "${section.title}"\nConteúdo: ${section.content?.slice(0, 400) || ""}\n→ TIPO OBRIGATÓRIO: ${a.type}`;
+        }).join("\n\n---\n\n");
+
+        const exResult = await callAI(
+          LOVABLE_API_KEY,
+          INLINE_EXERCISE_SYSTEM_PROMPT + `\n\n${angleInstruction}`,
+          `Gere exercícios inline para estas seções. CADA EXERCÍCIO DEVE SER DO TIPO ESPECIFICADO:\n\n${assignmentPrompt}\n\nÍndices válidos para afterSectionIndex: ${interactionAssignments.map(a => a.sectionIndex).join(", ")}`,
+          INLINE_EXERCISE_TOOLS,
+          "generate_inline_exercises",
+          { retryOnTruncation: true },
+        );
+
+        // Log AI exercise structure for diagnostics
+        console.log(`[v8-generate] AI exercises: ${JSON.stringify((exResult.exercises || []).map((ex: any) => ({ type: ex.type, s: ex.afterSectionIndex, dk: Object.keys(ex.data || {}) })))}`);
+
+        const INLINE_REQUIRED_DATA_KEYS: Record<string, string[]> = {
+          'true-false': ['statements'],
+          'fill-in-blanks': ['sentences'],
+          'complete-sentence': ['sentences'],
+          'multiple-choice': ['question', 'options'],
+          'flipcard-quiz': ['cards'],
+          'scenario-selection': ['scenarios'],
+          'platform-match': ['scenarios', 'platforms'],
+          'timed-quiz': ['questions'],
+        };
+
+        // ─────────────────────────────────────────────────────────────
+        // 🚦 PEDAGOGICAL MINIMUMS — Contrato V8 oficial
+        // Causa-raiz fix: validação só de presença (INLINE_REQUIRED_DATA_KEYS)
+        // não bloqueia exercícios estruturalmente vazios (ex: platform-match
+        // com 1 plataforma, multiple-choice com 2 opções).
+        // Esta tabela impõe cardinalidade mínima por tipo.
+        // Documentado em mem://v8/contract/pedagogical-minimums-standard
+        // ─────────────────────────────────────────────────────────────
+        const PEDAGOGICAL_MINIMUMS: Record<string, Record<string, number>> = {
+          'platform-match':     { platforms: 2, scenarios: 2 },
+          'multiple-choice':    { options: 3 },
+          'true-false':         { statements: 2 },
+          'drag-drop':          { categories: 2, items: 3 },
+          'flipcard-quiz':      { cards: 2 },
+          'scenario-selection': { scenarios: 1 },
+          'fill-in-blanks':     { sentences: 1 },
+          'complete-sentence':  { sentences: 1 },
+          'timed-quiz':         { questions: 2 },
+        };
+
+        /**
+         * Verifica se um exercício atende aos mínimos pedagógicos.
+         * Retorna { ok: true } ou { ok: false, violations: [{ field, expected, actual }] }
+         */
+        const checkPedagogicalMinimums = (ex: any): { ok: boolean; violations: Array<{ field: string; expected: number; actual: number }> } => {
+          const rules = PEDAGOGICAL_MINIMUMS[ex.type];
+          if (!rules) return { ok: true, violations: [] };
+          const data = ex.data || {};
+          const violations: Array<{ field: string; expected: number; actual: number }> = [];
+          for (const [field, expected] of Object.entries(rules)) {
+            const arr = data[field];
+            const actual = Array.isArray(arr) ? arr.length : 0;
+            if (actual < expected) {
+              violations.push({ field, expected, actual });
+            }
+          }
+          return { ok: violations.length === 0, violations };
+        };
+
+        /**
+         * Tenta auto-converter um exercício que viola mínimos para um tipo viável.
+         * Hoje cobre: platform-match (platforms<2) → multiple-choice derivado dos cenários.
+         * Retorna o exercício convertido ou null se conversão não for possível/segura.
+         */
+        const autoConvertExercise = (ex: any, violations: Array<{ field: string; expected: number; actual: number }>): any | null => {
+          // Caso 1: platform-match com platforms<2 mas scenarios>=2 → multiple-choice
+          if (ex.type === 'platform-match') {
+            const d = ex.data || {};
+            const platformsViolation = violations.find(v => v.field === 'platforms');
+            if (platformsViolation && Array.isArray(d.scenarios) && d.scenarios.length >= 2) {
+              const firstScenario = d.scenarios[0];
+              const correctText = firstScenario?.text || 'Cenário principal';
+              const options = d.scenarios.slice(0, 4).map((sc: any, i: number) => ({
+                id: `opt-${i + 1}`,
+                text: (sc.text || `Opção ${i + 1}`).slice(0, 80),
+                isCorrect: i === 0,
+              }));
+              if (options.length < 3) {
+                // Pad com distratores genéricos para atingir mínimo de 3
+                while (options.length < 3) {
+                  options.push({
+                    id: `opt-${options.length + 1}`,
+                    text: 'Nenhuma das anteriores',
+                    isCorrect: false,
+                  });
+                }
+              }
+              const platformName = (d.platforms?.[0]?.name) || 'a ferramenta';
+              console.warn(`[v8-generate] PEDAGOGICAL AUTO-CONVERT: platform-match ${ex.id} → multiple-choice (platforms=1)`);
+              return {
+                ...ex,
+                type: 'multiple-choice',
+                data: {
+                  question: `Qual destes cenários é mais adequado para ${platformName}?`,
+                  options,
+                  correctAnswer: options[0].text,
+                  explanation: firstScenario?.explanation || 'Revise o conteúdo da seção para entender o melhor uso.',
+                },
+              };
+            }
+          }
+          return null;
+        };
+
+
+        // ── DATA NORMALIZATION: Rescue exercise data from root level into data object ──
+        const normalizeExerciseData = (ex: any): any => {
+          const dataKeysByType: Record<string, string[]> = {
+            'true-false': ['statements', 'feedback'],
+            'fill-in-blanks': ['sentences', 'feedback'],
+            'complete-sentence': ['sentences'],
+            'multiple-choice': ['statements', 'questions', 'feedback', 'question', 'options', 'correctAnswer', 'explanation'],
+            'flipcard-quiz': ['cards'],
+            'scenario-selection': ['scenarios'],
+            'platform-match': ['scenarios', 'platforms'],
+            'timed-quiz': ['questions', 'timePerQuestion', 'bonusPerSecondLeft', 'timeoutPenalty', 'visualTheme'],
+          };
+          const keysToMove = dataKeysByType[ex.type] || [];
+          const currentData = ex.data && typeof ex.data === 'object' ? { ...ex.data } : {};
+          let rescued = false;
+          for (const key of keysToMove) {
+            if (!(key in currentData) && key in ex) {
+              currentData[key] = ex[key];
+              rescued = true;
+            }
+          }
+          if (rescued) {
+            console.warn(`[v8-generate] DATA RESCUE for ${ex.type}: moved keys from root into data`);
+          }
+          return { ...ex, data: currentData };
+        };
+
+        const normalizePlatformKey = (value: unknown): string =>
+          String(value ?? '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '');
+
+        // ── MC RESCUE: Auto-convert legacy formats to question+options for multiple-choice ──
+        const rescueMultipleChoice = (ex: any): any => {
+          if (ex.type !== 'multiple-choice') return ex;
+          const d = ex.data || {};
+
+          // Already has correct MC schema
+          if (typeof d.question === 'string' && Array.isArray(d.options) && d.options.length > 0) return ex;
+
+          // Legacy format 1: true-false-like statements[]
+          if (Array.isArray(d.statements) && d.statements.length > 0) {
+            console.warn(`[v8-generate] MC RESCUE: Converting statements→question+options for ${ex.id}`);
+            const stmt = d.statements[0] || {};
+            const rescuedData = {
+              ...d,
+              question: stmt.text || 'Questão',
+              options: d.statements.map((s: any, i: number) => ({
+                id: s.id || `opt-${i + 1}`,
+                text: s.text || `Opção ${i + 1}`,
+                isCorrect: !!s.correct,
+              })),
+              explanation: stmt.explanation || d.explanation || d.feedback?.perfect || '',
+            };
+            delete rescuedData.statements;
+            return { ...ex, data: rescuedData };
+          }
+
+          // Legacy format 2: timed-like questions[] returned for multiple-choice
+          if (Array.isArray(d.questions) && d.questions.length > 0) {
+            console.warn(`[v8-generate] MC RESCUE: Converting questions[]→question+options for ${ex.id}`);
+            const q0 = d.questions[0] || {};
+            const rawOptions = Array.isArray(q0.options) ? q0.options : [];
+            const normalizedOptions = rawOptions.map((opt: any, i: number) => {
+              if (typeof opt === 'string') {
+                return { id: `opt-${i + 1}`, text: opt, isCorrect: i === 0 };
+              }
+              return {
+                id: opt?.id || `opt-${i + 1}`,
+                text: opt?.text || `Opção ${i + 1}`,
+                isCorrect: Boolean(opt?.isCorrect ?? opt?.correct),
+              };
+            });
+
+            if (normalizedOptions.length > 0 && !normalizedOptions.some((o: any) => o.isCorrect)) {
+              normalizedOptions[0].isCorrect = true;
+            }
+
+            const rescuedData = {
+              ...d,
+              question: q0.question || q0.text || d.question || 'Questão',
+              options: normalizedOptions,
+              explanation: q0.explanation || d.explanation || d.feedback?.perfect || '',
+            };
+            delete rescuedData.questions;
+            return { ...ex, data: rescuedData };
+          }
+
+          return ex;
+        };
+
+        // ── FLIPCARD RESCUE: Ensure each card has ≥3 options with exactly 1 correct ──
+        const rescueFlipCardQuiz = (ex: any): any => {
+          if (ex.type !== 'flipcard-quiz') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.cards)) return ex;
+          const DISTRACTOR_POOL = [
+            'Nenhuma das anteriores',
+            'Todas as anteriores',
+            'Depende do contexto',
+            'Não se aplica',
+          ];
+          d.cards = d.cards.map((card: any, ci: number) => {
+            if (!Array.isArray(card.options)) card.options = [];
+            // Ensure exactly 1 correct
+            const correctCount = card.options.filter((o: any) => o.isCorrect).length;
+            if (correctCount === 0 && card.options.length > 0) {
+              card.options[0].isCorrect = true;
+              console.warn(`[v8-generate] FLIPCARD RESCUE: card ${ci} had 0 correct, marked first as correct`);
+            } else if (correctCount > 1) {
+              let found = false;
+              card.options = card.options.map((o: any) => {
+                if (o.isCorrect && !found) { found = true; return o; }
+                if (o.isCorrect) return { ...o, isCorrect: false };
+                return o;
+              });
+              console.warn(`[v8-generate] FLIPCARD RESCUE: card ${ci} had ${correctCount} correct, kept only first`);
+            }
+            // Pad to minimum 3 options
+            let distIdx = 0;
+            while (card.options.length < 3 && distIdx < DISTRACTOR_POOL.length) {
+              const existing = new Set(card.options.map((o: any) => o.text));
+              if (!existing.has(DISTRACTOR_POOL[distIdx])) {
+                card.options.push({
+                  id: `pad-${ci}-${distIdx}`,
+                  text: DISTRACTOR_POOL[distIdx],
+                  isCorrect: false,
+                });
+                console.warn(`[v8-generate] FLIPCARD RESCUE: padded card ${ci} with distractor "${DISTRACTOR_POOL[distIdx]}"`);
+              }
+              distIdx++;
+            }
+            return card;
+          });
+          return { ...ex, data: d };
+        };
+
+        // ── TIMED-QUIZ RESCUE: Ensure each question has ≥3 options with exactly 1 correct ──
+        const rescueTimedQuiz = (ex: any): any => {
+          if (ex.type !== 'timed-quiz') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.questions)) return ex;
+          d.questions = d.questions.map((q: any, qi: number) => {
+            if (!Array.isArray(q.options)) q.options = [];
+            const correctCount = q.options.filter((o: any) => o.isCorrect).length;
+            if (correctCount === 0 && q.options.length > 0) {
+              q.options[0].isCorrect = true;
+              console.warn(`[v8-generate] TIMED-QUIZ RESCUE: question ${qi} had 0 correct`);
+            } else if (correctCount > 1) {
+              let found = false;
+              q.options = q.options.map((o: any) => {
+                if (o.isCorrect && !found) { found = true; return o; }
+                if (o.isCorrect) return { ...o, isCorrect: false };
+                return o;
+              });
+            }
+            while (q.options.length < 3) {
+              q.options.push({ id: `pad-q${qi}-${q.options.length}`, text: 'Nenhuma das anteriores', isCorrect: false });
+              console.warn(`[v8-generate] TIMED-QUIZ RESCUE: padded question ${qi}`);
+            }
+            return q;
+          });
+          return { ...ex, data: d };
+        };
+
+        // ── TRUE-FALSE RESCUE: Ensure ≥2 statements with correct fields ──
+        const rescueTrueFalse = (ex: any): any => {
+          if (ex.type !== 'true-false') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.statements)) return ex;
+          d.statements = d.statements.filter((s: any) => s && typeof s.text === 'string' && s.text.length > 0);
+          for (const stmt of d.statements) {
+            if (typeof stmt.correct !== 'boolean') stmt.correct = true;
+            if (!stmt.explanation) stmt.explanation = 'Revise o conteúdo da seção para entender melhor.';
+            if (!stmt.id) stmt.id = `stmt-rescue-${Math.random().toString(36).slice(2, 6)}`;
+          }
+          if (d.statements.length < 2) {
+            console.warn(`[v8-generate] TRUE-FALSE RESCUE: only ${d.statements.length} valid statements`);
+          }
+          if (!d.feedback) d.feedback = { perfect: 'Perfeito!', good: 'Bom trabalho!', needsReview: 'Revise o conteúdo' };
+          return { ...ex, data: d };
+        };
+
+        // ── SCENARIO-SELECTION RESCUE: Ensure scenarios have options + correctAnswer ──
+        const rescueScenarioSelection = (ex: any): any => {
+          if (ex.type !== 'scenario-selection') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.scenarios)) return ex;
+          d.scenarios = d.scenarios.filter((sc: any) => {
+            if (!sc || typeof sc !== 'object') return false;
+            // Must have situation or title, and options
+            const hasSituation = typeof sc.situation === 'string' && sc.situation.length > 0;
+            const hasOptions = Array.isArray(sc.options) && sc.options.length >= 2;
+            if (!hasSituation && !hasOptions) {
+              console.warn(`[v8-generate] SCENARIO RESCUE: rejected empty scenario ${sc.id}`);
+              return false;
+            }
+            return true;
+          });
+          for (const sc of d.scenarios) {
+            if (!sc.id) sc.id = `sc-rescue-${Math.random().toString(36).slice(2, 6)}`;
+            if (!Array.isArray(sc.options) || sc.options.length < 2) {
+              sc.options = sc.options || [];
+              while (sc.options.length < 3) {
+                sc.options.push(`Opção ${sc.options.length + 1}`);
+              }
+              console.warn(`[v8-generate] SCENARIO RESCUE: padded options for ${sc.id}`);
+            }
+            if (!sc.correctAnswer || !sc.options.includes(sc.correctAnswer)) {
+              sc.correctAnswer = sc.options[0];
+              console.warn(`[v8-generate] SCENARIO RESCUE: fixed correctAnswer for ${sc.id}`);
+            }
+            if (!sc.explanation) sc.explanation = 'Revise o conteúdo da seção.';
+          }
+          return { ...ex, data: d };
+        };
+
+        // ── PLATFORM-MATCH RESCUE: Ensure scenarios + platforms exist ──
+        const rescuePlatformMatch = (ex: any): any => {
+          if (ex.type !== 'platform-match') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.scenarios)) d.scenarios = [];
+          if (!Array.isArray(d.platforms)) d.platforms = [];
+          d.platforms = d.platforms.filter((p: any) => p && (typeof p.id === 'string' || typeof p.name === 'string'));
+          // Ensure each scenario has required fields
+          d.scenarios = d.scenarios.filter((sc: any) => sc && typeof sc.text === 'string' && sc.text.length > 0);
+          // Ensure platforms have required fields
+          for (const p of d.platforms) {
+            if (!p.id) p.id = normalizePlatformKey(p.name) || `plat-rescue-${Math.random().toString(36).slice(2, 6)}`;
+            if (!p.name) p.name = p.id;
+            if (!p.icon) p.icon = '🔹';
+            if (!p.color) p.color = '#6366f1';
+          }
+
+          const platformIdByToken = new Map<string, string>();
+          for (const p of d.platforms) {
+            const idKey = normalizePlatformKey(p.id);
+            const nameKey = normalizePlatformKey(p.name);
+            if (idKey) platformIdByToken.set(idKey, p.id);
+            if (nameKey) platformIdByToken.set(nameKey, p.id);
+          }
+
+          for (const sc of d.scenarios) {
+            if (!sc.id) sc.id = `pm-rescue-${Math.random().toString(36).slice(2, 6)}`;
+            if (!sc.emoji) sc.emoji = '🔹';
+
+            const rawCorrectPlatform = typeof sc.correctPlatform === 'string' ? sc.correctPlatform : '';
+            const resolvedPlatformId = platformIdByToken.get(normalizePlatformKey(rawCorrectPlatform));
+
+            if (resolvedPlatformId) {
+              if (rawCorrectPlatform !== resolvedPlatformId) {
+                console.warn(`[v8-generate] PLATFORM-MATCH RESCUE: normalized correctPlatform "${rawCorrectPlatform}" → "${resolvedPlatformId}" for ${sc.id}`);
+              }
+              sc.correctPlatform = resolvedPlatformId;
+            } else if (d.platforms.length > 0) {
+              sc.correctPlatform = d.platforms[0].id;
+              console.warn(`[v8-generate] PLATFORM-MATCH RESCUE: assigned default platform id for ${sc.id}`);
+            }
+          }
+
+          return { ...ex, data: d };
+        };
+
+        // ── COMPLETE-SENTENCE RESCUE: Ensure sentences have options ──
+        const rescueCompleteSentence = (ex: any): any => {
+          if (ex.type !== 'complete-sentence') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.sentences)) return ex;
+          for (const sent of d.sentences) {
+            if (!sent.id) sent.id = `sent-rescue-${Math.random().toString(36).slice(2, 6)}`;
+            if (!Array.isArray(sent.correctAnswers) || sent.correctAnswers.length === 0) {
+              sent.correctAnswers = ['resposta'];
+              console.warn(`[v8-generate] COMPLETE-SENTENCE RESCUE: no correctAnswers for ${sent.id}`);
+            }
+            // Ensure options include the correct answer + distractors
+            if (!Array.isArray(sent.options) || sent.options.length < 2) {
+              const correct = sent.correctAnswers[0];
+              sent.options = [correct, 'Nenhuma das anteriores', 'Não se aplica', 'Outra opção'];
+              // Shuffle
+              for (let i = sent.options.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [sent.options[i], sent.options[j]] = [sent.options[j], sent.options[i]];
+              }
+              console.warn(`[v8-generate] COMPLETE-SENTENCE RESCUE: padded options for ${sent.id}`);
+            }
+          }
+          return { ...ex, data: d };
+        };
+
+        // ── FILL-IN-BLANKS RESCUE: Ensure sentences have hints ──
+        const rescueFillInBlanks = (ex: any): any => {
+          if (ex.type !== 'fill-in-blanks') return ex;
+          const d = ex.data || {};
+          if (!Array.isArray(d.sentences)) return ex;
+          for (const sent of d.sentences) {
+            if (!sent.id) sent.id = `fib-rescue-${Math.random().toString(36).slice(2, 6)}`;
+            if (!Array.isArray(sent.correctAnswers) || sent.correctAnswers.length === 0) {
+              sent.correctAnswers = ['resposta'];
+              console.warn(`[v8-generate] FILL-IN-BLANKS RESCUE: no correctAnswers for ${sent.id}`);
+            }
+            if (!sent.hint) sent.hint = 'Pense no conceito principal desta seção.';
+          }
+          if (!d.feedback) d.feedback = { allCorrect: 'Perfeito!', someCorrect: 'Quase lá!', needsReview: 'Revise o conteúdo' };
+          return { ...ex, data: d };
+        };
+
+        // Track pedagogical violations for log/observability
+        const pedagogicalViolations: Array<{ exerciseId: string; type: string; violations: any[]; action: 'converted' | 'discarded' }> = [];
+
+        generatedInlineExercises = (exResult.exercises || [])
+          .map((ex: any, idx: number) => {
+            const base = normalizeExerciseData({
+              ...ex,
+              id: `inline-ex-${String(idx + 1).padStart(2, "0")}`,
+              title: sanitizeV8Text(ex.title || ''),
+              instruction: sanitizeV8Text(ex.instruction || ''),
+              successMessage: sanitizeV8Text(ex.successMessage || ''),
+              tryAgainMessage: sanitizeV8Text(ex.tryAgainMessage || ''),
+            });
+            const rescued = rescueFillInBlanks(rescueCompleteSentence(rescuePlatformMatch(rescueScenarioSelection(rescueTrueFalse(rescueTimedQuiz(rescueFlipCardQuiz(rescueMultipleChoice(base))))))));
+
+            // 🚦 PEDAGOGICAL ENFORCEMENT: try auto-convert before discarding
+            const check = checkPedagogicalMinimums(rescued);
+            if (!check.ok) {
+              const converted = autoConvertExercise(rescued, check.violations);
+              if (converted) {
+                const reCheck = checkPedagogicalMinimums(converted);
+                if (reCheck.ok) {
+                  pedagogicalViolations.push({
+                    exerciseId: rescued.id,
+                    type: rescued.type,
+                    violations: check.violations,
+                    action: 'converted',
+                  });
+                  return converted;
+                }
+              }
+              // Will be discarded by the filter below
+              pedagogicalViolations.push({
+                exerciseId: rescued.id,
+                type: rescued.type,
+                violations: check.violations,
+                action: 'discarded',
+              });
+              (rescued as any).__pedagogicalRejection = check.violations;
+            }
+            return rescued;
+          })
+          .filter((ex: any) => {
+            // 🚦 Pedagogical minimum gate (drops exercises tagged for rejection)
+            if (ex.__pedagogicalRejection) {
+              const v = JSON.stringify(ex.__pedagogicalRejection);
+              console.error(`[v8-generate] PEDAGOGICAL REJECTED ${ex.id} (${ex.type}): ${v}`);
+              return false;
+            }
+            const requiredKeys = INLINE_REQUIRED_DATA_KEYS[ex.type];
+            if (!requiredKeys) {
+              console.warn(`[v8-generate] Unknown inline exercise type: ${ex.type}, rejecting`);
+              return false;
+            }
+            const dataKeys = Object.keys(ex.data || {});
+            const hasRequired = requiredKeys.every((k: string) => dataKeys.includes(k));
+            if (!hasRequired) {
+              console.error(`[v8-generate] REJECTED inline exercise ${ex.id} (${ex.type}): missing required keys [${requiredKeys.join(', ')}]`);
+              return false;
+            }
+            // ── CONTENT DEPTH VALIDATION: Reject arrays of empty/id-only objects ──
+            const CONTENT_DEPTH_RULES: Record<string, { key: string; minFields: number; requiredFields?: string[] }> = {
+              'scenario-selection': { key: 'scenarios', minFields: 3, requiredFields: ['situation', 'options', 'correctAnswer'] },
+              'platform-match': { key: 'scenarios', minFields: 2, requiredFields: ['text', 'correctPlatform'] },
+              'flipcard-quiz': { key: 'cards', minFields: 3, requiredFields: ['front', 'back', 'options'] },
+              'timed-quiz': { key: 'questions', minFields: 2, requiredFields: ['question', 'options'] },
+            };
+            const depthRule = CONTENT_DEPTH_RULES[ex.type];
+            if (depthRule) {
+              const items = ex.data[depthRule.key];
+              if (Array.isArray(items)) {
+                for (const item of items) {
+                  const itemKeys = Object.keys(item || {});
+                  if (itemKeys.length < depthRule.minFields) {
+                    console.error(`[v8-generate] REJECTED ${ex.id} (${ex.type}): item has only ${itemKeys.length} fields (min ${depthRule.minFields}): ${JSON.stringify(item).slice(0, 100)}`);
+                    return false;
+                  }
+                  if (depthRule.requiredFields) {
+                    const missing = depthRule.requiredFields.filter(f => !(f in item));
+                    if (missing.length > 0) {
+                      console.error(`[v8-generate] REJECTED ${ex.id} (${ex.type}): item missing fields [${missing.join(', ')}]: ${JSON.stringify(item).slice(0, 100)}`);
+                      return false;
+                    }
+                  }
+                }
+              }
+            }
+            return true;
+          });
+
+        // ── V8-C01 COUNTS: Detailed rejection logging ──
+        const aiReturnedCount = (exResult.exercises || []).length;
+        const acceptedCount = generatedInlineExercises.length;
+        const rejectedCount = aiReturnedCount - acceptedCount;
+        
+        const rejectionReasons: Record<string, number> = {};
+        (exResult.exercises || []).forEach((ex: any) => {
+          const requiredKeys = INLINE_REQUIRED_DATA_KEYS[ex.type];
+          if (!requiredKeys) {
+            rejectionReasons[`unknown_type:${ex.type}`] = (rejectionReasons[`unknown_type:${ex.type}`] || 0) + 1;
+          } else {
+            const dataKeys = Object.keys(ex.data || {});
+            const hasAll = requiredKeys.every((k: string) => dataKeys.includes(k));
+            if (!hasAll) {
+              const missing = requiredKeys.filter((k: string) => !dataKeys.includes(k));
+              rejectionReasons[`missing_keys:${ex.type}(need:${missing.join('+')})`] = 
+                (rejectionReasons[`missing_keys:${ex.type}(need:${missing.join('+')})`] || 0) + 1;
+            }
+          }
+        });
+
+        // 🚦 Add pedagogical violations to rejection reasons + persist log
+        for (const pv of pedagogicalViolations) {
+          const key = `pedagogical_minimum:${pv.type}(${pv.action})`;
+          rejectionReasons[key] = (rejectionReasons[key] || 0) + 1;
+        }
+        if (pedagogicalViolations.length > 0) {
+          try {
+            const sbLog = createClient(supabaseUrl, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+            await sbLog.from('system_logs').insert({
+              tipo: 'warning',
+              contexto: 'v8-pipeline',
+              mensagem: `pedagogical_minimum_violation: ${pedagogicalViolations.length} exercício(s)`,
+              detalhes: {
+                lesson_title: lessonTitle,
+                violations: pedagogicalViolations,
+              },
+            });
+          } catch (logErr) {
+            console.error('[v8-generate] failed to write pedagogical violation log:', logErr);
+          }
+        }
+
+        console.log(`[v8-generate] V8-C01 COUNTS: aiReturned=${aiReturnedCount}, accepted=${acceptedCount}, rejected=${rejectedCount}`);
+        if (rejectedCount > 0 || pedagogicalViolations.length > 0) {
+          console.error(`[v8-generate] V8-C01 REJECTION DETAILS: ${JSON.stringify(rejectionReasons)}`);
+        }
+        
+        // ── V8-C01 GATE: Missing sections → RETRY with fallback, not instant death ──
+        const coveredSections = new Set(generatedInlineExercises.map((e: any) => e.afterSectionIndex));
+        const missingSections = interactionAssignments.filter(a => !coveredSections.has(a.sectionIndex));
+        
+        if (missingSections.length > 0) {
+          const missingDesc = missingSections.map(m => `S${m.sectionIndex}(${m.type})`).join(', ');
+          console.warn(`[v8-generate] V8-C01 SOFT FAIL: Missing exercises for: ${missingDesc}. Attempting recovery...`);
+          errors.push(`Exercícios faltando para seções: ${missingDesc}`);
+          
+          // Recovery: retry only the missing sections individually
+          for (const missing of missingSections) {
+            try {
+              const section = sections[missing.sectionIndex];
+              const singlePrompt = `Seção ${missing.sectionIndex} (index ${missing.sectionIndex}): "${section.title}"\nConteúdo: ${section.content?.slice(0, 400) || ""}\n→ TIPO OBRIGATÓRIO: ${missing.type}`;
+              
+              const retryResult = await callAI(
+                LOVABLE_API_KEY,
+                INLINE_EXERCISE_SYSTEM_PROMPT + `\n\n${angleInstruction}`,
+                `Gere EXATAMENTE 1 exercício inline do tipo ${missing.type} para esta seção:\n\n${singlePrompt}\n\nafterSectionIndex obrigatório: ${missing.sectionIndex}`,
+                INLINE_EXERCISE_TOOLS,
+                "generate_inline_exercises",
+              );
+              
+              const retryExercises = (retryResult.exercises || [])
+                .map((ex: any) => {
+                  const base = normalizeExerciseData({
+                    ...ex,
+                    id: `inline-ex-retry-${missing.sectionIndex}`,
+                    afterSectionIndex: missing.sectionIndex,
+                    type: missing.type,
+                    title: sanitizeV8Text(ex.title || ''),
+                    instruction: sanitizeV8Text(ex.instruction || ''),
+                    successMessage: sanitizeV8Text(ex.successMessage || 'Muito bem!'),
+                    tryAgainMessage: sanitizeV8Text(ex.tryAgainMessage || 'Tente novamente!'),
+                  });
+                  return rescueFillInBlanks(rescueCompleteSentence(rescuePlatformMatch(rescueScenarioSelection(rescueTrueFalse(rescueTimedQuiz(rescueFlipCardQuiz(rescueMultipleChoice(base))))))));
+                })
+                .filter((ex: any) => {
+                  const requiredKeys = INLINE_REQUIRED_DATA_KEYS[ex.type];
+                  if (!requiredKeys) return false;
+                  return requiredKeys.every((k: string) => Object.keys(ex.data || {}).includes(k));
+                });
+              
+              if (retryExercises.length > 0) {
+                generatedInlineExercises.push(retryExercises[0]);
+                console.log(`[v8-generate] V8-C01 RECOVERY SUCCESS: S${missing.sectionIndex}(${missing.type})`);
+              } else {
+                console.error(`[v8-generate] V8-C01 RECOVERY FAILED: S${missing.sectionIndex}(${missing.type}) — no valid exercise after retry`);
+              }
+            } catch (retryErr) {
+              console.error(`[v8-generate] V8-C01 RECOVERY ERROR for S${missing.sectionIndex}: ${retryErr instanceof Error ? retryErr.message : retryErr}`);
+            }
+          }
+          
+          // Final check: if still missing critical exercises, warn but don't crash
+          const stillCovered = new Set(generatedInlineExercises.map((e: any) => e.afterSectionIndex));
+          const stillMissing = interactionAssignments.filter(a => !stillCovered.has(a.sectionIndex));
+          if (stillMissing.length > 0) {
+            const stillMissingDesc = stillMissing.map(m => `S${m.sectionIndex}(${m.type})`).join(', ');
+            console.error(`[v8-generate] V8-C01 WARNING: Still missing after retry: ${stillMissingDesc}. Pipeline continues with ${generatedInlineExercises.length} exercises.`);
+            errors.push(`Exercícios não recuperados: ${stillMissingDesc}`);
+          }
+        }
+
+        // ── V8-C01 DEDUPLICATE: Keep only first exercise per section (AI sometimes returns multiples) ──
+        const seenSections = new Set<number>();
+        generatedInlineExercises = generatedInlineExercises.filter((ex: any) => {
+          if (seenSections.has(ex.afterSectionIndex)) {
+            console.warn(`[v8-generate] DEDUP: Removing duplicate exercise for section ${ex.afterSectionIndex}`);
+            return false;
+          }
+          seenSections.add(ex.afterSectionIndex);
+          return true;
+        });
+        
+        progress.push(`${generatedInlineExercises.length} exercícios inline gerados (V8-C01: ${generatedInlineExercises.map((e: any) => e.type).join(', ')})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Inline exercise generation failed";
+        errors.push(`Inline exercises: ${msg}`);
+        console.error("[v8-generate-lesson-content] Inline exercise generation error:", msg);
+      }
+    }
+
+    // ── 3.05 Coursiv Prompt Builder (penultimate section) ──
+    let generatedCoursivSentences: any[] = [];
+    if (coursivTargetIdx >= 0) {
+      progress.push("Gerando exercício Coursiv (montagem de prompt)...");
+      try {
+        const coursivSectionContent = `Seção ${coursivTargetIdx} (index ${coursivTargetIdx}): ${sections[coursivTargetIdx].title}\n${sections[coursivTargetIdx].content?.slice(0, 500) || ""}`;
+
+        const coursivResult = await callAI(
+          LOVABLE_API_KEY,
+          COURSIV_SYSTEM_PROMPT,
+          `Gere um exercício Coursiv de montagem de prompt para esta seção da aula "${lessonTitle}":\n\n${coursivSectionContent}\n\nafterSectionIndex obrigatório: ${coursivTargetIdx}`,
+          COURSIV_BUILDER_TOOLS,
+          "generate_coursiv_exercise",
+          { retryOnTruncation: true },
+        );
+
+        if (coursivResult && coursivResult.sentences && coursivResult.sentences.length > 0) {
+          const coursivExercise = {
+            id: `coursiv-gen-01`,
+            afterSectionIndex: coursivTargetIdx,
+            title: sanitizeV8Text(coursivResult.title || 'Monte o Prompt Profissional'),
+            instruction: sanitizeV8Text(coursivResult.instruction || 'Complete as frases escolhendo os chips corretos.'),
+            sentences: coursivResult.sentences.map((s: any) => ({
+              ...s,
+              text: sanitizeV8Text(s.text || ''),
+              correctAnswers: (s.correctAnswers || []).map((a: string) => sanitizeV8Text(a)),
+              options: (s.options || []).map((o: string) => sanitizeV8Text(o)),
+            })),
+          };
+
+          // ── COURSIV QUALITY GATE (HARD FAIL) ──
+          const COURSIV_BANNED_WORDS = ['café', 'bolo', 'receita', 'árvore', 'carro', 'poeta', 'clima', 'fonte tipográfica', 'imagens decorativas', 'planeta', 'exercício físico', 'filme', 'música', 'esporte', 'animal', 'comida', 'viagem', 'moda'];
+          const coursivErrors: string[] = [];
+
+          // Must be exactly 1 sentence
+          if (coursivExercise.sentences.length !== 1) {
+            coursivErrors.push(`Expected exactly 1 sentence, got ${coursivExercise.sentences.length}`);
+          }
+
+          const sentence = coursivExercise.sentences[0];
+          if (sentence) {
+            const blankCount = (sentence.text?.match(/_______/g) || []).length;
+            const answerCount = (sentence.correctAnswers || []).length;
+
+            if (blankCount !== 4) {
+              coursivErrors.push(`Text must contain EXACTLY 4 blanks, found ${blankCount}`);
+            }
+
+            // V8-C01: max 14 words per sentence
+            const wordCount = sentence.text.trim().split(/\s+/).length;
+            if (wordCount > 20) {
+              coursivErrors.push(`Text must have max 20 words, found ${wordCount}`);
+            }
+
+            if (answerCount !== 4) {
+              coursivErrors.push(`correctAnswers must have EXACTLY 4 items, got ${answerCount}`);
+            }
+
+            // V8-C01: Force options = correctAnswers only (no distractors)
+            sentence.options = [...(sentence.correctAnswers || [])];
+
+            // Check banned words in correct answers
+            for (const ans of (sentence.correctAnswers || [])) {
+              const ansLower = String(ans).toLowerCase();
+              for (const banned of COURSIV_BANNED_WORDS) {
+                if (ansLower.includes(banned)) {
+                  coursivErrors.push(`Answer "${ans}" contains banned word "${banned}"`);
+                }
+              }
+            }
+          }
+
+          if (coursivErrors.length > 0) {
+            const errorMsg = `COURSIV QUALITY GATE HARD FAIL: ${coursivErrors.join('; ')}`;
+            console.error(`[v8-generate] ${errorMsg}`);
+            throw new Error(errorMsg);
+          }
+
+          generatedCoursivSentences.push(coursivExercise);
+          const blanksFinal = (sentence?.text?.match(/_______/g) || []).length;
+          progress.push(`1 exercício Coursiv gerado (afterSection: ${coursivTargetIdx}, ${blanksFinal} lacunas inline, quality: PASSED)`);
+        } else {
+          // Coursiv é OBRIGATÓRIO no V8-C01
+          const errorMsg = `COURSIV HARD FAIL: AI returned empty or null coursiv result for section ${coursivTargetIdx}`;
+          console.error(`[v8-generate] ${errorMsg}`);
+          throw new Error(errorMsg);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Coursiv generation failed";
+        // HARD FAIL deve propagar
+        if (msg.includes('HARD FAIL')) {
+          throw err;
+        }
+        errors.push(`Coursiv: ${msg}`);
+        console.error("[v8-generate-lesson-content] Coursiv generation error:", msg);
+      }
+    }
+
+    // ── 3.1 Phase 9: Generate ONE playground at LAST section only (no intermediate playgrounds) ──
+    let generatedPlaygrounds: any[] = [];
+    {
+      const hasManualAtLast = manualPlaygrounds.some((p: any) => p.afterSectionIndex === lastIdx);
+
+      // Force all manual playgrounds to last section
+      for (const mp of manualPlaygrounds) {
+        if (mp.afterSectionIndex !== lastIdx) {
+          console.log(`[v8-generate] Phase 9: Moving manual playground from section ${mp.afterSectionIndex} → ${lastIdx}`);
+          mp.afterSectionIndex = lastIdx;
+        }
+      }
+
+      if (!hasManualAtLast && manualPlaygrounds.length === 0 && sections.length >= 4) {
+        // Generate ONE playground for the final section
+        progress.push("Gerando playground final...");
+        try {
+          const lastSectionContent = `Seção ${lastIdx} (index ${lastIdx}): ${sections[lastIdx].title}\n${sections[lastIdx].content?.slice(0, 500) || ""}`;
+
+          const pgResult = await callAI(
+            LOVABLE_API_KEY,
+            PLAYGROUND_SYSTEM_PROMPT,
+            `Gere UM playground para a última seção desta aula "${lessonTitle}":\n\n${lastSectionContent}\n\nÍndice obrigatório para afterSectionIndex: ${lastIdx}`,
+            PLAYGROUND_TOOLS,
+            "generate_inline_playgrounds",
+          );
+
+          const rawPg = (pgResult.playgrounds || [])[0];
+          if (rawPg) {
+            rawPg.afterSectionIndex = lastIdx; // Force last section
+            rawPg.id = `playground-gen-final`;
+            const sanitized = sanitizeFields(rawPg, ['title', 'instruction', 'narration', 'amateurPrompt', 'professionalPrompt', 'amateurResult', 'professionalResult', 'successMessage', 'tryAgainMessage']);
+            generatedPlaygrounds.push(sanitized);
+            progress.push("1 playground final gerado");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Playground generation failed";
+          errors.push(`Playground: ${msg}`);
+          console.error("[v8-generate-lesson-content] Playground generation error:", msg);
+        }
+
+        // Fallback placeholder if generation failed
+        if (generatedPlaygrounds.length === 0) {
+          console.warn(`[v8-generate] Phase 9: Playground generation failed. Adding placeholder at last section ${lastIdx}`);
+          generatedPlaygrounds.push({
+            id: `playground-gen-final`,
+            afterSectionIndex: lastIdx,
+            title: "Sua Vez — Prompt Real",
+            instruction: "Agora é com você! Aplique tudo o que aprendeu nesta aula escrevendo um prompt profissional.",
+            amateurPrompt: "Me ajuda com isso",
+            professionalPrompt: "Preciso de uma análise detalhada sobre X, considerando Y e Z, formatada como lista com prós e contras",
+            amateurResult: "Resultado genérico e vago.",
+            professionalResult: "Análise estruturada com pontos específicos, prós e contras organizados, e recomendação final baseada nos critérios solicitados.",
+            successMessage: "Excelente! Seu prompt demonstra domínio das técnicas aprendidas.",
+            tryAgainMessage: "Quase lá! Tente adicionar mais contexto e especificidade ao seu prompt.",
+            userChallenge: {
+              instruction: "Escreva um prompt profissional aplicando as técnicas desta aula.",
+              challengePrompt: "Crie um prompt que seja específico, contextualizado e com formato definido.",
+              hints: ["Inclua um objetivo claro", "Adicione contexto real", "Defina o formato esperado"],
+              evaluationCriteria: ["Tem objetivo claro", "Inclui contexto", "Define formato"],
+            },
+          });
+        }
+      }
+
+      // Resolve quiz conflict at lastIdx
+      const allPg = [...manualPlaygrounds, ...generatedPlaygrounds];
+      const allQuizzesForConflict = [...(manualQuizzes || []), ...generatedQuizzes];
+      const quizAtLast = allQuizzesForConflict.find((q: any) => q.afterSectionIndex === lastIdx);
+      if (quizAtLast && allPg.some((p: any) => p.afterSectionIndex === lastIdx)) {
+        const freeSection = Array.from({ length: lastIdx }, (_, i) => lastIdx - 1 - i)
+          .find(i => i >= 2
+            && !allQuizzesForConflict.some((q: any) => q !== quizAtLast && q.afterSectionIndex === i)
+            && !allPg.some((p: any) => p.afterSectionIndex === i));
+        if (freeSection !== undefined) {
+          console.log(`[v8-generate] Phase 9: Moving quiz from section ${lastIdx} → ${freeSection}`);
+          quizAtLast.afterSectionIndex = freeSection;
+        }
+      }
+    }
+
+    // ── 3.5. Generate inline insights (1 per playground) ──
+    let generatedInsights: any[] = [];
+    const allPlaygroundsForInsights = [...manualPlaygrounds, ...generatedPlaygrounds];
+    if (allPlaygroundsForInsights.length > 0) {
+      progress.push("Gerando insights inline...");
+      try {
+        const INSIGHT_TOOLS = [
+          {
+            type: "function",
+            function: {
+              name: "generate_inline_insights",
+              description: "Generate insight reward blocks for sections with playgrounds. Each insight has 3 sentences: (1) highlight the skill shift, (2) before vs after contrast, (3) practical application today.",
+              parameters: {
+                type: "object",
+                properties: {
+                  insights: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        afterSectionIndex: { type: "number", description: "0-based section index this insight follows (same as the playground)" },
+                        title: { type: "string", description: "Short title like '💡 Aprender e Crescer'" },
+                        insightText: { type: "string", description: "3 sentences: (1) Percebeu a virada? (2) Antes X, agora Y. (3) Aplica hoje em..." },
+                        creditsReward: { type: "number", description: "Credits reward, typically 10" },
+                      },
+                      required: ["afterSectionIndex", "title", "insightText", "creditsReward"],
+                    },
+                  },
+                },
+                required: ["insights"],
+              },
+            },
+          },
+        ];
+
+        const INSIGHT_SYSTEM_PROMPT = `Você é um designer instrucional. Gere blocos de insight de recompensa para seções que possuem playgrounds.
+Cada insight deve ter exatamente 3 frases:
+1. "Percebeu a virada?" — destaque a mudança de habilidade
+2. "Antes X, agora Y" — contraste antes/depois
+3. "Aplica hoje em..." — aplicação prática imediata
+
+O título deve ser curto e começar com 💡. creditsReward deve ser 10. Português Brasileiro (pt-BR).`;
+
+        const insightSectionsContent = allPlaygroundsForInsights.map((p: any) =>
+          `Playground após seção ${p.afterSectionIndex}: ${sections[p.afterSectionIndex]?.title || "?"}\nInstrução: ${p.instruction?.slice(0, 200) || ""}`
+        ).join("\n\n");
+
+        const insightResult = await callAI(
+          LOVABLE_API_KEY,
+          INSIGHT_SYSTEM_PROMPT,
+          `Gere insights para estes playgrounds:\n\n${insightSectionsContent}\n\nÍndices válidos: ${allPlaygroundsForInsights.map((p: any) => p.afterSectionIndex).join(", ")}`,
+          INSIGHT_TOOLS,
+          "generate_inline_insights",
+        );
+
+        generatedInsights = (insightResult.insights || [])
+          .filter((ins: any) => ins.afterSectionIndex >= 0 && ins.afterSectionIndex < sections.length)
+          .map((ins: any) => ({
+            ...ins,
+            id: crypto.randomUUID(),
+            // Phase 1: Sanitize encoding
+            title: sanitizeV8Text(ins.title || ''),
+            insightText: sanitizeV8Text(ins.insightText || ''),
+          }));
+        progress.push(`${generatedInsights.length} insights gerados`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Insight generation failed";
+        errors.push(`Insights: ${msg}`);
+        console.error("[v8-generate-lesson-content] Insight generation error:", msg);
+        generatedInsights = [];
+      }
+    }
+
+    // ── 3.6 Generate learnAndGrow synthesis block ──
+    let generatedLearnAndGrow: any = undefined;
+    if (allPlaygroundsForInsights.length > 0) {
+      progress.push("Gerando bloco 'Aprender e Crescer'...");
+      try {
+        const LEARN_AND_GROW_TOOLS = [
+          {
+            type: "function",
+            function: {
+              name: "generate_learn_and_grow",
+              description: "Generate a pedagogical synthesis block with 3 sentences summarizing the lesson transformation.",
+              parameters: {
+                type: "object",
+                properties: {
+                  whatChanged: { type: "string", description: "1 sentence: what skill shift happened (the 'aha' moment)" },
+                  beforeAfter: { type: "string", description: "1 sentence: 'Antes era X, agora é Y' contrast" },
+                  practicalExample: { type: "string", description: "1 sentence: concrete practical application today" },
+                },
+                required: ["whatChanged", "beforeAfter", "practicalExample"],
+              },
+            },
+          },
+        ];
+
+        const LEARN_AND_GROW_SYSTEM_PROMPT = `Você é um designer instrucional. Gere um bloco de síntese pedagógica com EXATAMENTE 3 frases curtas (pt-BR):
+1. "Percebeu a virada?" — destaque a mudança de habilidade que aconteceu na aula
+2. "Antes era X, agora é Y" — contraste claro entre o antes e depois
+3. "Aplica hoje em..." — 1 exemplo prático concreto que o aluno pode fazer HOJE
+
+Cada frase deve ter no máximo 25 palavras. Seja direto e inspirador.`;
+
+        const playgroundContext = allPlaygroundsForInsights.map((p: any) =>
+          `Playground: ${p.title}\nInstrução: ${p.instruction?.slice(0, 200) || ""}`
+        ).join("\n\n");
+
+        const lagResult = await callAI(
+          LOVABLE_API_KEY,
+          LEARN_AND_GROW_SYSTEM_PROMPT,
+          `Gere o bloco "Aprender e Crescer" para esta aula "${lessonTitle}".\n\nResumo:\n${contentSummary.slice(0, 800)}\n\nPlayground:\n${playgroundContext}`,
+          LEARN_AND_GROW_TOOLS,
+          "generate_learn_and_grow",
+        );
+
+        if (lagResult && lagResult.whatChanged && lagResult.beforeAfter && lagResult.practicalExample) {
+          generatedLearnAndGrow = {
+            id: crypto.randomUUID(),
+            whatChanged: sanitizeV8Text(lagResult.whatChanged),
+            beforeAfter: sanitizeV8Text(lagResult.beforeAfter),
+            practicalExample: sanitizeV8Text(lagResult.practicalExample),
+          };
+          progress.push("Bloco 'Aprender e Crescer' gerado");
+        } else {
+          console.warn("[v8-generate] learnAndGrow: AI returned incomplete data, skipping");
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "LearnAndGrow generation failed";
+        errors.push(`LearnAndGrow: ${msg}`);
+        console.error("[v8-generate-lesson-content] LearnAndGrow generation error:", msg);
+      }
+    }
+
+    // ── 4. Generate final exercises (conditional count by pattern) ──
+    const finalExerciseMin = isCompactPattern ? 1 : 2;
+    const finalExerciseMax = isCompactPattern ? 2 : 4;
+    let generatedExercises: any[] = [];
+    if (manualExercises.length === 0) {
+      progress.push(`Gerando exercícios finais (${finalExerciseMin}-${finalExerciseMax})...`);
+
+      // Build conditional tools with adjusted min/max
+      const conditionalExerciseTools = [{
+        type: "function",
+        function: {
+          ...EXERCISE_TOOLS[0].function,
+          description: `Generate ${finalExerciseMin}-${finalExerciseMax} final exercises for the lesson, choosing the best types based on content context. Vary types - don't repeat.`,
+          parameters: {
+            ...EXERCISE_TOOLS[0].function.parameters,
+            properties: {
+              ...EXERCISE_TOOLS[0].function.parameters.properties,
+              exercises: {
+                ...EXERCISE_TOOLS[0].function.parameters.properties.exercises,
+                minItems: finalExerciseMin,
+                maxItems: finalExerciseMax,
+              },
+            },
+          },
+        },
+      }];
+
+      try {
+        const exerciseResult = await callAI(
+          LOVABLE_API_KEY,
+          EXERCISE_SYSTEM_PROMPT,
+          `Analise o conteúdo completo desta aula "${lessonTitle}" e gere ${finalExerciseMin}-${finalExerciseMax} exercícios finais variados:\n\n${contentSummary}`,
+          conditionalExerciseTools,
+          "generate_exercises",
+          { retryOnTruncation: true },
+        );
+
+        const rawExercises = (exerciseResult.exercises || []).map((ex: any, idx: number) => ({
+          ...ex,
+          id: `exercise-${String(idx + 1).padStart(2, "0")}`,
+          passingScore: 70,
+          maxAttempts: 3,
+        }));
+
+        // ── VALIDATION: Reject exercises with empty data objects ──
+        const REQUIRED_DATA_KEYS: Record<string, string[]> = {
+          'true-false': ['statements'],
+          'drag-drop': ['items', 'categories'],
+          'fill-in-blanks': ['sentences'],
+          'complete-sentence': ['sentences'],
+          'multiple-choice': ['question', 'options'],
+          'flipcard-quiz': ['cards'],
+          'timed-quiz': ['questions'],
+          'scenario-selection': ['scenarios'],
+          'platform-match': ['scenarios', 'platforms'],
+          'data-collection': ['scenario'],
+        };
+
+        generatedExercises = rawExercises.filter((ex: any) => {
+          const requiredKeys = REQUIRED_DATA_KEYS[ex.type];
+          if (!requiredKeys) {
+            console.warn(`[v8-generate-lesson-content] Unknown exercise type: ${ex.type}, keeping as-is`);
+            return true;
+          }
+          const dataKeys = Object.keys(ex.data || {});
+          const hasRequired = requiredKeys.every((k: string) => dataKeys.includes(k));
+          if (!hasRequired) {
+            console.error(`[v8-generate-lesson-content] REJECTED exercise ${ex.id} (${ex.type}): data is empty or missing required keys [${requiredKeys.join(', ')}]. Got: [${dataKeys.join(', ')}]`);
+            errors.push(`Exercício ${ex.id} (${ex.type}) rejeitado: data vazio`);
+            return false;
+          }
+          return true;
+        });
+
+        progress.push(`${generatedExercises.length} exercícios válidos de ${rawExercises.length} gerados (tipos: ${generatedExercises.map((e: any) => e.type).join(", ")})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Exercise generation failed";
+        errors.push(`Exercícios: ${msg}`);
+        console.error("[v8-generate-lesson-content] Exercise generation error:", msg);
+      }
+    } else {
+      generatedExercises = manualExercises;
+      progress.push(`${manualExercises.length} exercícios manuais mantidos`);
+    }
+
+    // ── 5. Generate images (optional) ──
+    let imageResults: Array<{ index: number; imageUrl?: string; error?: string }> = [];
+    if (shouldGenerateImages) {
+      progress.push("Gerando imagens por seção...");
+      imageResults = await generateImages(
+        sections,
+        `draft-${Date.now()}`,
+        supabaseUrl,
+        authHeader,
+        supabaseAnonKey,
+      );
+      const successCount = imageResults.filter(r => r.imageUrl).length;
+      progress.push(`${successCount}/${sections.length} imagens geradas`);
+      imageResults.filter(r => r.error).forEach(r => errors.push(`Imagem seção ${r.index}: ${r.error}`));
+    }
+
+    // ── 6. Build final response ──
+    const updatedSections = sections.map((s: any, i: number) => {
+      const imageResult = imageResults.find(r => r.index === i);
+      return {
+        ...s,
+        ...(imageResult?.imageUrl ? { imageUrl: imageResult.imageUrl } : {}),
+      };
+    });
+
+    // Merge manual + generated
+    const allQuizzes = [...manualQuizzes, ...generatedQuizzes];
+    const allPlaygrounds = [...manualPlaygrounds, ...generatedPlaygrounds];
+
+    const response = {
+      sections: updatedSections,
+      inlineQuizzes: allQuizzes,
+      inlinePlaygrounds: allPlaygrounds,
+      inlineInsights: generatedInsights,
+      inlineCompleteSentences: generatedCoursivSentences,
+      inlineExercises: generatedInlineExercises,
+      learnAndGrow: generatedLearnAndGrow || undefined,
+      exercises: generatedExercises,
+      contractPattern: selectedPattern,
+      progress,
+      errors: errors.length > 0 ? errors : undefined,
+    };
+
+    console.log(`[v8-generate-lesson-content] Done: ${allQuizzes.length} quizzes, ${allPlaygrounds.length} playgrounds, ${generatedInlineExercises.length} inline exercises, ${generatedExercises.length} final exercises, ${imageResults.filter(r => r.imageUrl).length} images`);
+
+    return new Response(JSON.stringify(response), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (e) {
+    console.error("[v8-generate-lesson-content] Error:", e);
+    const errorMessage = e instanceof Error ? e.message : "Unknown error";
+    const status = errorMessage.includes("RATE_LIMIT") ? 429 : errorMessage.includes("CREDITS_EXHAUSTED") ? 402 : 500;
+    return new Response(
+      JSON.stringify({ error: errorMessage }),
+      { status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+});

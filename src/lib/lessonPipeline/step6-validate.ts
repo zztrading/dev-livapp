@@ -1,0 +1,227 @@
+import { Step5Output, Step6Output } from './types';
+import { buildCardsReport, type CardsReport } from './cardsReport';
+
+/**
+ * STEP 6: VALIDAÇÃO COMPLETA
+ * - Valida que TODOS os componentes foram criados corretamente
+ * - Verifica áudio, timestamps, exercícios, metadados
+ * - Garante integridade antes de consolidar
+ */
+export async function step6ValidateAll(input: Step5Output): Promise<Step6Output> {
+  const startTime = Date.now();
+  console.log('✅ [STEP 6] Validando todos os componentes...');
+
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // 1. VALIDAR ÁUDIO
+  console.log('   🔍 Validando áudio...');
+  if (input.model === 'v1' || input.model === 'v3') {
+    if (!input.audioUrl) {
+      errors.push('❌ audioUrl ausente');
+    } else {
+      console.log(`      ✅ audioUrl presente: ${input.audioUrl}`);
+    }
+
+    if (!input.wordTimestamps || input.wordTimestamps.length === 0) {
+      errors.push('❌ wordTimestamps ausentes');
+    } else {
+      console.log(`      ✅ ${input.wordTimestamps.length} word timestamps`);
+    }
+  } else if (input.model === 'v2' || input.model === 'v4' || input.model === 'v5') {
+    // V2, V4 e V5 usam audioUrls por seção
+    if (!input.audioUrls || input.audioUrls.length === 0) {
+      errors.push('❌ audioUrls ausentes');
+    } else {
+      console.log(`      ✅ ${input.audioUrls.length} audioUrls presentes`);
+    }
+
+    if (!input.durations || input.durations.length === 0) {
+      errors.push('❌ durations ausentes');
+    } else {
+      console.log(`      ✅ ${input.durations.length} durações`);
+    }
+
+    // V5: Validar experienceCards se presentes
+    if (input.model === 'v5' && input.sections) {
+      let totalCards = 0;
+      input.sections.forEach((section: any, idx: number) => {
+        if (section.experienceCards && section.experienceCards.length > 0) {
+          totalCards += section.experienceCards.length;
+          section.experienceCards.forEach((card: any, cardIdx: number) => {
+            if (!card.id) warnings.push(`⚠️ ExperienceCard ${cardIdx + 1} na seção ${idx + 1} sem ID`);
+            if (!card.type) errors.push(`❌ ExperienceCard ${cardIdx + 1} na seção ${idx + 1} sem tipo`);
+
+            // Validação opcional de visualScript (recomendado mas não obrigatório)
+            if (card.visualScript && card.visualScript.trim().length < 20) {
+              warnings.push(`⚠️ ExperienceCard ${cardIdx + 1} (${card.type}) tem visualScript muito curto (mínimo recomendado: 20 caracteres)`);
+            }
+
+            // Validação de title/subtitle
+            if (!card.title && !card.props?.title) {
+              warnings.push(`⚠️ ExperienceCard ${cardIdx + 1} (${card.type}) sem título (nem em 'title' nem em 'props.title')`);
+            }
+          });
+        }
+      });
+      console.log(`      ✨ ${totalCards} experience cards validados`);
+    }
+  }
+
+  // 2. VALIDAR TIMESTAMPS
+  console.log('   🔍 Validando timestamps...');
+  if (!input.structuredContent) {
+    errors.push('❌ structuredContent ausente');
+    console.error('      ❌ structuredContent está undefined');
+  } else if (input.model === 'v1' || input.model === 'v2' || input.model === 'v4' || input.model === 'v5') {
+    const sections = input.structuredContent.sections || [];
+    if (sections.length === 0) {
+      errors.push('❌ Nenhuma seção em structuredContent');
+    } else {
+      console.log(`      ✅ ${sections.length} seções`);
+    }
+
+    sections.forEach((section: any, idx: number) => {
+      if (section.timestamp === undefined) {
+        errors.push(`❌ Seção ${idx + 1} sem timestamp`);
+      }
+    });
+
+    const sectionsWithTimestamps = sections.filter((s: any) => s.timestamp !== undefined).length;
+    console.log(`      ✅ ${sectionsWithTimestamps}/${sections.length} seções com timestamps`);
+
+  } else if (input.model === 'v3') {
+    const slides = input.structuredContent.slides || [];
+    if (slides.length === 0) {
+      errors.push('❌ Nenhum slide em structuredContent');
+    } else {
+      console.log(`      ✅ ${slides.length} slides`);
+    }
+
+    slides.forEach((slide: any, idx: number) => {
+      if (slide.timestamp === undefined) {
+        errors.push(`❌ Slide ${idx + 1} sem timestamp`);
+      }
+      if (!slide.imageUrl) {
+        warnings.push(`⚠️ Slide ${idx + 1} sem imagem`);
+      }
+    });
+
+    const slidesWithTimestamps = slides.filter((s: any) => s.timestamp !== undefined).length;
+    console.log(`      ✅ ${slidesWithTimestamps}/${slides.length} slides com timestamps`);
+  }
+
+  // 3. VALIDAR EXERCÍCIOS
+  console.log('   🔍 Validando exercícios...');
+  if (!input.exercisesConfig || input.exercisesConfig.length === 0) {
+    errors.push('❌ Nenhum exercício gerado');
+  } else {
+    console.log(`      ✅ ${input.exercisesConfig.length} exercícios`);
+
+    input.exercisesConfig.forEach((exercise: any, idx: number) => {
+      if (!exercise.id) errors.push(`❌ Exercício ${idx + 1} sem ID`);
+      if (!exercise.type) errors.push(`❌ Exercício ${idx + 1} sem tipo`);
+
+      // Validar conteúdo baseado no tipo (suporta exercise.data.* e exercise.* direto)
+      const hasContent =
+        exercise.data?.question ||
+        exercise.data?.instruction ||
+        exercise.data?.statements ||  // true-false
+        exercise.data?.sentences ||   // complete-sentence
+        exercise.question ||
+        exercise.instruction ||
+        exercise.statements ||
+        exercise.sentences ||
+        exercise.title;         // fallback
+
+      if (!hasContent) {
+        errors.push(`❌ Exercício ${idx + 1} sem conteúdo válido`);
+      }
+    });
+
+    const validExercises = input.exercisesConfig.filter((e: any) =>
+      e.id && e.type && (e.question || e.instruction || e.statements || e.sentences || e.title)
+    ).length;
+    console.log(`      ✅ ${validExercises}/${input.exercisesConfig.length} exercícios válidos`);
+  }
+
+  // 4. VALIDAR METADADOS
+  console.log('   🔍 Validando metadados...');
+  if (!input.title) errors.push('❌ Título ausente');
+  else console.log(`      ✅ Título: "${input.title}"`);
+
+  if (!input.trackId) errors.push('❌ trackId ausente');
+  else console.log(`      ✅ trackId: ${input.trackId}`);
+
+  if (input.orderIndex === undefined) errors.push('❌ orderIndex ausente');
+  else console.log(`      ✅ orderIndex: ${input.orderIndex}`);
+
+  if (!input.audioText) errors.push('❌ audioText ausente');
+  else console.log(`      ✅ audioText: ${input.audioText.length} caracteres`);
+
+  // 5. VALIDAR DURAÇÃO TOTAL
+  console.log('   🔍 Validando duração...');
+  if (!input.totalDuration || input.totalDuration <= 0) {
+    errors.push('❌ totalDuration inválida');
+  } else {
+    const minutes = Math.floor(input.totalDuration / 60);
+    const seconds = Math.floor(input.totalDuration % 60);
+    console.log(`      ✅ Duração total: ${minutes}min ${seconds}s`);
+  }
+
+  // RESUMO DA VALIDAÇÃO
+  const elapsedTime = Date.now() - startTime;
+  console.log(`\n📊 [STEP 6] Validação completa em ${elapsedTime}ms:`);
+  console.log(`   ✅ Checks passados: ${20 - errors.length - warnings.length}/20`);
+
+  if (warnings.length > 0) {
+    console.warn(`   ⚠️ Warnings: ${warnings.length}`);
+    warnings.forEach(w => console.warn(`      ${w}`));
+  }
+
+  if (errors.length > 0) {
+    console.error(`   ❌ Erros críticos: ${errors.length}`);
+    errors.forEach(e => console.error(`      ${e}`));
+    throw new Error(`Validação falhou com ${errors.length} erro(s): ${errors.join(', ')}`);
+  }
+
+  console.log('✅ [STEP 6] Todos os componentes validados com sucesso!');
+
+  // 6. RELATÓRIO DE EXPERIENCE CARDS (V5) — warning, não bloqueia
+  let cardsReport: CardsReport | undefined;
+  if (input.model === 'v5' && input.sections && input.sections.length > 0) {
+    try {
+      console.log('   🔍 Gerando relatório de Experience Cards (V5)...');
+      cardsReport = buildCardsReport(input.sections as any[]);
+      const { summary } = cardsReport;
+      console.log(
+        `      📊 Cards: total=${summary.total} | válidos=${summary.valid} | inválidos=${summary.invalid}`
+      );
+      console.log(
+        `      📦 Origem: inline=${summary.byOrigin.inline} | root=${summary.byOrigin.root} | unknown=${summary.byOrigin.unknown}`
+      );
+      if (summary.invalid > 0) {
+        console.warn(`      ⚠️ ${summary.invalid} card(s) com problemas (não bloqueante):`);
+        cardsReport.invalidCards.forEach((c) => {
+          c.issues.forEach((iss) => {
+            const suffix = iss.suggestion ? ` — ${iss.suggestion}` : '';
+            const msg = `      ⚠️ [section ${c.sectionIndex} / card ${c.index} / ${c.type ?? 'NO_TYPE'}] ${iss.type}: ${iss.message}${suffix}`;
+            console.warn(msg);
+            warnings.push(msg.trim());
+          });
+        });
+      } else if (summary.total > 0) {
+        console.log(`      ✅ Todos os ${summary.total} cards válidos`);
+      }
+    } catch (e) {
+      console.warn('   ⚠️ Falha ao gerar cardsReport:', e);
+    }
+  }
+
+  return {
+    ...input,
+    validationPassed: true,
+    validationWarnings: warnings,
+    cardsReport,
+  };
+}

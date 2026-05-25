@@ -1,0 +1,31 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Analysis and documentation files (auto-generated)
+LESSON_ANALYSIS_INDEX.md
+LESSON_FILES_MAP.md
+LESSON_FORMAT_QUICK_REFERENCE.md
+LESSON_JSON_FORMAT_ANALYSIS.md
+README_LESSON_ANALYSIS.md
