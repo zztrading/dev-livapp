@@ -63,8 +63,27 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
     const { data: { user }, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !user || !user.email) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+    if (userErr) {
+      console.error("[create-checkout-session] getUser error:", userErr.message);
+      return jsonResponse({
+        error: "Unauthorized",
+        reason: "jwt_validation_failed",
+        detail: userErr.message,
+      }, 401);
+    }
+    if (!user) {
+      console.warn("[create-checkout-session] No user from JWT");
+      return jsonResponse({
+        error: "Unauthorized",
+        reason: "no_user_in_jwt",
+      }, 401);
+    }
+    if (!user.email) {
+      console.warn("[create-checkout-session] User has no email:", user.id);
+      return jsonResponse({
+        error: "Unauthorized",
+        reason: "user_missing_email",
+      }, 401);
     }
 
     const body = await req.json().catch(() => ({}));
