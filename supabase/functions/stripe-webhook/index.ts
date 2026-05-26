@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno edge function; not compiled by the Vite tsconfig.
 // Stripe webhook handler — signed + idempotent.
 //
 // Env vars required:

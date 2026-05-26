@@ -1,3 +1,4 @@
+// @ts-nocheck — Deno edge function; not compiled by the Vite tsconfig.
 // Creates a Stripe Checkout Session for the authenticated user + selected plan.
 // Returns { url } so the frontend can window.location.href = url.
 //
@@ -19,7 +20,7 @@ import Stripe from "https://esm.sh/stripe@17.5.0?target=deno";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, stripe-signature",
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
 };
 
