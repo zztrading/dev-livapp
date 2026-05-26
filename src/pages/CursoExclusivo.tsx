@@ -230,11 +230,12 @@ export default function CursoExclusivo() {
             Desbloqueie Todo o Conteúdo
           </h3>
           <p className="text-gray-600 mb-6 max-w-2xl mx-auto">
-            Faça upgrade para o plano Pro e tenha acesso ilimitado a todos os módulos,
+            Faça upgrade para um plano premium e tenha acesso ilimitado a todos os módulos,
             certificação profissional e suporte prioritário.
           </p>
           <Button
             size="lg"
+            onClick={() => navigate('/pricing')}
             className="font-semibold px-8 shadow-lg text-white hover:shadow-xl transform hover:-translate-y-0.5 transition-all"
             style={{background: 'linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)'}}
           >

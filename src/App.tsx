@@ -35,6 +35,7 @@ const Onboarding = lazyRetry(() => import("./pages/Onboarding"));
 const OnboardingFinish = lazyRetry(() => import("./pages/OnboardingFinish"));
 const BillingSuccess = lazyRetry(() => import("./pages/BillingSuccess"));
 const BillingCancel = lazyRetry(() => import("./pages/BillingCancel"));
+const Pricing = lazyRetry(() => import("./pages/Pricing"));
 const Dashboard = lazyRetry(() => import("./pages/Dashboard"));
 // TrailDetail (página antiga /trail/:id) foi descontinuada — substituída por TrailToCourseRedirect.
 const TrailToCourseRedirect = lazyRetry(() => import("./pages/TrailToCourseRedirect"));
@@ -185,6 +186,7 @@ const App = () => (
                 <Route path="/onboarding/finish" element={<OnboardingFinish />} />
                 <Route path="/billing/success" element={<BillingSuccess />} />
                 <Route path="/billing/cancel" element={<BillingCancel />} />
+                <Route path="/pricing" element={<ProtectedRoute><Pricing /></ProtectedRoute>} />
                 <Route path="/dashboard" element={
                   <SuspenseWithFallback fallback={<DashboardSkeleton />}>
                     <Dashboard />
