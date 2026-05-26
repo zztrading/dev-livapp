@@ -56,13 +56,17 @@ serve(async (req) => {
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: { user }, error: userErr } = await userClient.auth.getUser();
+    const adminClient = createClient(supabaseUrl, serviceKey);
+
+    // Extract the JWT from the Authorization header and validate it explicitly.
+    // Calling getUser() without args makes the SDK look for a session in
+    // localStorage (which doesn't exist on Deno) and return "Auth session
+    // missing!". Passing the token explicitly skips that path and validates
+    // the JWT against this project's auth secret.
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    const { data: { user }, error: userErr } = await adminClient.auth.getUser(token);
     if (userErr) {
       console.error("[create-checkout-session] getUser error:", userErr.message);
       return jsonResponse({
@@ -92,7 +96,6 @@ serve(async (req) => {
       return jsonResponse({ error: "Missing plan_id" }, 400);
     }
 
-    const adminClient = createClient(supabaseUrl, serviceKey);
     const { data: plan, error: planErr } = await adminClient
       .from("plans")
       .select("id, name, stripe_price_id, is_active")
