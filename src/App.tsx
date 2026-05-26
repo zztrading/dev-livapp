@@ -99,6 +99,7 @@ const V8Lesson = lazyRetry(() => import("./pages/V8Lesson"));
 const AdminV8Create = lazyRetry(() => import("./pages/AdminV8Create"));
 const AdminV8ReprocessAudio = lazyRetry(() => import("./pages/AdminV8ReprocessAudio"));
 const V8QuizA11yHarness = lazyRetry(() => import("./pages/__dev/V8QuizA11yHarness"));
+const Quiz = lazyRetry(() => import("./pages/Quiz"));
 const ChatDesignDemo = lazyRetry(() => import("./pages/ChatDesignDemo"));
 const V7Documentation = lazyRetry(() => import("./pages/V7Documentation"));
 const Admin3DDemos = lazyRetry(() => import("./pages/Admin3DDemos"));
@@ -177,6 +178,7 @@ const App = () => (
               <Routes>
                 <Route path="/" element={<Index />} />
                 <Route path="/auth" element={<Auth />} />
+                <Route path="/quiz" element={<Quiz />} />
                 <Route path="/onboarding" element={<Onboarding />} />
                 <Route path="/onboarding/finish" element={<OnboardingFinish />} />
                 <Route path="/dashboard" element={

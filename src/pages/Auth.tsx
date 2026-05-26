@@ -196,6 +196,9 @@ const Auth = () => {
     }
   };
 
+
+
+
   // Show loading while checking session to prevent flash
   if (checkingSession) {
     return (
@@ -356,6 +359,8 @@ const Auth = () => {
               </form>
             </TabsContent>
           </Tabs>
+
+
 
           <div className="mt-6 text-center">
             <Button
