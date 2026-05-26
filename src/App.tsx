@@ -33,6 +33,8 @@ function lazyRetry<T extends React.ComponentType<any>>(
 // Lazy loaded pages - loaded on demand
 const Onboarding = lazyRetry(() => import("./pages/Onboarding"));
 const OnboardingFinish = lazyRetry(() => import("./pages/OnboardingFinish"));
+const BillingSuccess = lazyRetry(() => import("./pages/BillingSuccess"));
+const BillingCancel = lazyRetry(() => import("./pages/BillingCancel"));
 const Dashboard = lazyRetry(() => import("./pages/Dashboard"));
 // TrailDetail (página antiga /trail/:id) foi descontinuada — substituída por TrailToCourseRedirect.
 const TrailToCourseRedirect = lazyRetry(() => import("./pages/TrailToCourseRedirect"));
@@ -181,6 +183,8 @@ const App = () => (
                 <Route path="/quiz" element={<Quiz />} />
                 <Route path="/onboarding" element={<Onboarding />} />
                 <Route path="/onboarding/finish" element={<OnboardingFinish />} />
+                <Route path="/billing/success" element={<BillingSuccess />} />
+                <Route path="/billing/cancel" element={<BillingCancel />} />
                 <Route path="/dashboard" element={
                   <SuspenseWithFallback fallback={<DashboardSkeleton />}>
                     <Dashboard />

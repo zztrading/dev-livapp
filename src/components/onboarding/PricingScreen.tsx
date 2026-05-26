@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
+import { startCheckout, setPendingPlan, type PlanId } from '@/services/billing';
+import { Loader2 } from 'lucide-react';
 
 interface UserProfile {
   readiness_level: string;
@@ -9,20 +11,21 @@ interface UserProfile {
 
 interface PricingScreenProps {
   profile: UserProfile | null;
-  /** When false, plan selection sends user through signup → /onboarding/finish (replays anon answers). */
+  /** When false, plan selection stores intent + sends user through signup → /onboarding/finish. */
   isAuthenticated?: boolean;
 }
 
 export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreenProps) => {
   const [timeLeft, setTimeLeft] = useState(600);
   const [currentPurchase, setCurrentPurchase] = useState(0);
+  const [checkoutPlanId, setCheckoutPlanId] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const purchases = [
-    'chris.al*** escolheu 4 semanas',
-    'michael.ta*** escolheu 12 semanas',
-    'emily.ba*** escolheu 1 semana'
+    'chris.al*** escolheu Pro',
+    'michael.ta*** escolheu Elite',
+    'emily.ba*** escolheu Starter'
   ];
 
   useEffect(() => {
@@ -40,35 +43,53 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
   const minutes = Math.floor(timeLeft / 60);
   const seconds = timeLeft % 60;
 
-  const handleSelectPlan = (planName: string) => {
+  const handleSelectPlan = async (planId: PlanId, planName: string) => {
     if (!isAuthenticated) {
+      setPendingPlan(planId);
       toast({
         title: `Plano ${planName} reservado!`,
-        description: 'Crie sua conta para liberar seu acesso.',
+        description: 'Crie sua conta para finalizar o pagamento.',
       });
       setTimeout(() => navigate('/auth?mode=signup&returnTo=/onboarding/finish'), 600);
       return;
     }
 
-    toast({
-      title: "Plano selecionado!",
-      description: `Você escolheu o plano ${planName}. Redirecionando para o dashboard...`,
-    });
-    setTimeout(() => navigate('/dashboard'), 2000);
+    setCheckoutPlanId(planId);
+    try {
+      const { url } = await startCheckout(planId);
+      window.location.href = url;
+    } catch (err) {
+      setCheckoutPlanId(null);
+      toast({
+        title: 'Erro ao iniciar pagamento',
+        description: err instanceof Error ? err.message : 'Tente novamente em instantes.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const plans = [
-    { name: '1 Semana', oldPrice: 'R$ 27,80', newPrice: 'R$ 13,90', perDay: 'R$ 1,99/dia' },
-    { 
-      name: '4 Semanas', 
-      badge: '👑 MAIS POPULAR!', 
-      oldPrice: 'R$ 79,60', 
-      newPrice: 'R$ 39,80', 
-      perDay: 'R$ 1,43/dia', 
-      savings: 'Economize R$ 15,80', 
-      highlighted: true 
+  const plans: Array<{
+    id: PlanId;
+    name: string;
+    oldPrice: string;
+    newPrice: string;
+    perDay: string;
+    badge?: string;
+    savings?: string;
+    highlighted?: boolean;
+  }> = [
+    { id: 'starter', name: 'Starter', oldPrice: 'R$ 194,00', newPrice: 'R$ 97,00', perDay: 'R$ 3,23/dia' },
+    {
+      id: 'pro',
+      name: 'Pro',
+      badge: '👑 MAIS POPULAR!',
+      oldPrice: 'R$ 394,00',
+      newPrice: 'R$ 197,00',
+      perDay: 'R$ 6,57/dia',
+      savings: 'Economize R$ 197,00',
+      highlighted: true,
     },
-    { name: '12 Semanas', oldPrice: 'R$ 159,20', newPrice: 'R$ 79,60', perDay: 'R$ 0,96/dia', savings: 'Economize R$ 46,90' }
+    { id: 'elite', name: 'Elite', oldPrice: 'R$ 794,00', newPrice: 'R$ 397,00', perDay: 'R$ 13,23/dia', savings: 'Economize R$ 397,00' },
   ];
 
   return (
@@ -100,8 +121,8 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
         {/* Plans */}
         <div className="grid md:grid-cols-3 gap-6 mb-8">
           {plans.map((plan, i) => (
-            <div 
-              key={i} 
+            <div
+              key={i}
               className={`bg-white p-6 rounded-xl shadow-lg transition-transform ${
                 plan.highlighted ? 'ring-4 ring-blue-500 scale-105' : ''
               }`}
@@ -118,12 +139,20 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
                 <div className="text-gray-600">{plan.perDay}</div>
               </div>
               {plan.savings && <p className="text-green-600 font-semibold mb-4">💰 {plan.savings}</p>}
-              <Button 
-                className="w-full" 
+              <Button
+                className="w-full"
                 variant={plan.highlighted ? "default" : "outline"}
-                onClick={() => handleSelectPlan(plan.name)}
+                disabled={checkoutPlanId !== null}
+                onClick={() => handleSelectPlan(plan.id, plan.name)}
               >
-                Escolher Plano
+                {checkoutPlanId === plan.id ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Abrindo checkout...
+                  </>
+                ) : (
+                  'Escolher Plano'
+                )}
               </Button>
             </div>
           ))}
