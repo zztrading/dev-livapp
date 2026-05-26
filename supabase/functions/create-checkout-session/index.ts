@@ -5,16 +5,39 @@
 //   STRIPE_SECRET_KEY
 //   APP_URL
 //   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY (auto-injected)
+//
+// CORS helpers are inlined (was supabase/functions/_shared/cors.ts) so this file
+// is self-contained and deployable via the Supabase Dashboard UI, which doesn't
+// bundle sibling _shared/* files.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import Stripe from "https://esm.sh/stripe@17.5.0?target=deno";
-import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+
+// ─── Inlined CORS helpers ───────────────────────────────────────────────────
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, stripe-signature",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// ─── Stripe client ──────────────────────────────────────────────────────────
 
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") ?? "", {
   apiVersion: "2024-12-18.acacia",
   httpClient: Stripe.createFetchHttpClient(),
 });
+
+// ─── Handler ────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
