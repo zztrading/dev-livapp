@@ -930,6 +930,216 @@ export type Database = {
           },
         ]
       }
+      onboarding_v2_answers: {
+        Row: {
+          answer_value: string
+          answered_at: string
+          id: number
+          question_id: string
+          session_id: string
+        }
+        Insert: {
+          answer_value: string
+          answered_at?: string
+          id?: never
+          question_id: string
+          session_id: string
+        }
+        Update: {
+          answer_value?: string
+          answered_at?: string
+          id?: never
+          question_id?: string
+          session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_v2_answers_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_v2_sessions"
+            referencedColumns: ["session_id"]
+          },
+        ]
+      }
+      onboarding_v2_events: {
+        Row: {
+          created_at: string
+          event_data: Json | null
+          event_name: string
+          id: number
+          session_id: string
+          user_id: string | null
+          variant: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_data?: Json | null
+          event_name: string
+          id?: never
+          session_id: string
+          user_id?: string | null
+          variant?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_data?: Json | null
+          event_name?: string
+          id?: never
+          session_id?: string
+          user_id?: string | null
+          variant?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_v2_events_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_v2_sessions"
+            referencedColumns: ["session_id"]
+          },
+        ]
+      }
+      onboarding_v2_mini_experience: {
+        Row: {
+          combo_bonus_accumulated: number
+          completed_at: string | null
+          current_substep: string | null
+          dominio_level: string | null
+          dominio_score: number | null
+          filter_interest: string | null
+          quiz_t2_answer: string | null
+          quiz_t2_correct: boolean | null
+          quiz_t3_answer: string | null
+          quiz_t3_correct: boolean | null
+          quiz_t4_answer: string | null
+          quiz_t4_correct: boolean | null
+          quiz_t7_answer: string | null
+          quiz_t7_correct: boolean | null
+          session_id: string
+          started_at: string
+          uau1_style: string | null
+          uau1_theme: string | null
+          uau1_writing: string | null
+          uau2_challenge: string | null
+          uau2_goal: string | null
+          uau2_moment: string | null
+          uau2_prompt_built: string | null
+        }
+        Insert: {
+          combo_bonus_accumulated?: number
+          completed_at?: string | null
+          current_substep?: string | null
+          dominio_level?: string | null
+          dominio_score?: number | null
+          filter_interest?: string | null
+          quiz_t2_answer?: string | null
+          quiz_t2_correct?: boolean | null
+          quiz_t3_answer?: string | null
+          quiz_t3_correct?: boolean | null
+          quiz_t4_answer?: string | null
+          quiz_t4_correct?: boolean | null
+          quiz_t7_answer?: string | null
+          quiz_t7_correct?: boolean | null
+          session_id: string
+          started_at?: string
+          uau1_style?: string | null
+          uau1_theme?: string | null
+          uau1_writing?: string | null
+          uau2_challenge?: string | null
+          uau2_goal?: string | null
+          uau2_moment?: string | null
+          uau2_prompt_built?: string | null
+        }
+        Update: {
+          combo_bonus_accumulated?: number
+          completed_at?: string | null
+          current_substep?: string | null
+          dominio_level?: string | null
+          dominio_score?: number | null
+          filter_interest?: string | null
+          quiz_t2_answer?: string | null
+          quiz_t2_correct?: boolean | null
+          quiz_t3_answer?: string | null
+          quiz_t3_correct?: boolean | null
+          quiz_t4_answer?: string | null
+          quiz_t4_correct?: boolean | null
+          quiz_t7_answer?: string | null
+          quiz_t7_correct?: boolean | null
+          session_id?: string
+          started_at?: string
+          uau1_style?: string | null
+          uau1_theme?: string | null
+          uau1_writing?: string | null
+          uau2_challenge?: string | null
+          uau2_goal?: string | null
+          uau2_moment?: string | null
+          uau2_prompt_built?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_v2_mini_experience_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: true
+            referencedRelation: "onboarding_v2_sessions"
+            referencedColumns: ["session_id"]
+          },
+        ]
+      }
+      onboarding_v2_sessions: {
+        Row: {
+          completed_at: string | null
+          daily_goal_xp: number | null
+          last_step: string | null
+          linked_at: string | null
+          referrer: string | null
+          session_id: string
+          started_at: string
+          user_agent: string | null
+          user_id: string | null
+          utm_campaign: string | null
+          utm_content: string | null
+          utm_medium: string | null
+          utm_source: string | null
+          utm_term: string | null
+          variant: string
+        }
+        Insert: {
+          completed_at?: string | null
+          daily_goal_xp?: number | null
+          last_step?: string | null
+          linked_at?: string | null
+          referrer?: string | null
+          session_id: string
+          started_at?: string
+          user_agent?: string | null
+          user_id?: string | null
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+          variant?: string
+        }
+        Update: {
+          completed_at?: string | null
+          daily_goal_xp?: number | null
+          last_step?: string | null
+          linked_at?: string | null
+          referrer?: string | null
+          session_id?: string
+          started_at?: string
+          user_agent?: string | null
+          user_id?: string | null
+          utm_campaign?: string | null
+          utm_content?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+          utm_term?: string | null
+          variant?: string
+        }
+        Relationships: []
+      }
       pipeline_executions: {
         Row: {
           commit_hash: string | null
@@ -2646,6 +2856,10 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      link_onboarding_v2_to_user: {
+        Args: { p_session_id: string; p_user_id: string }
+        Returns: undefined
       }
       mark_dashboard_tour_seen: { Args: never; Returns: undefined }
       register_dashboard_login: {

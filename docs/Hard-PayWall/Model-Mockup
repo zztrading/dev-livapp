@@ -1,0 +1,556 @@
+# PAYWALL SPEC — World-Class Edition
+## v1.0 · Abril 2021
+
+> **Codinome interno: Twive.** Nome final do produto a ser definido.  
+> Candidatos atuais: `withstar.ai`, `starpilot.ai`, `seekstars.com`, `mystar.work`.  
+> **Validar com 5-10 usuários pré-MVP** antes de lockar.  
+>
+> Funil de conversão: trial → assinatura → retenção.  
+> Star = avatar do motor (engine). Toda copy em PT-BR, 1ª pessoa da Star.
+
+---
+
+## 1. PRINCÍPIOS INVIOLÁVEIS
+
+| # | Princípio | Por quê |
+|---|-----------|---------|
+| **01** | **Mostrar antes de cobrar** | 7 dias de Plano Pro **completo** no trial. Sem feature trancada. |
+| **02** | **Dor de perda real, nunca inventada** | Só dizer "Star vai parar" se ela vai parar de verdade. Sem dark pattern. |
+| **03** | **Star fala, não a empresa** | Toda copy de paywall é Star em 1ª pessoa. Cria vínculo emocional. |
+| **04** | **Retenção > conversão** | Cancel flow com 3 saídas. Mês 2-12 importa mais que dia 1-7. |
+
+---
+
+## 1.1 ROADMAP DA STAR — o que ela faz, e quando
+
+> Define limites do agente por release. **Documento estratégico**, não só técnico.  
+> Time sabe o que construir agora; investidor enxerga visão; usuário sabe o que esperar.
+
+### v1.0 — MVP (lançamento)
+- ✅ **Aplica em vagas** (auto-apply baseado em DNA + match ≥85%)
+- ✅ **Pausa/retoma sob comando** do usuário (botão único, persistente)
+- ✅ **Aprende com refusas** (quando user cancela aplicação, Star ajusta filtros)
+- ✅ **Adapta CV por vaga** (versiona variantes pra cada aplicação)
+- ❌ Não responde emails de recrutador
+- ❌ Não agenda entrevista
+- ❌ Não negocia salário
+
+### v1.5 — 3 meses pós-launch
+- ➕ **Sugere resposta a recrutador** (draft no inbox do usuário · user aprova em 1 clique antes de enviar)
+- ➕ Tom da resposta treinado no DNA (formal/casual/técnico)
+- ➕ Detecta intenção: "marcar call", "pedir mais info", "recusar educadamente"
+
+### v2.0 — 6 meses
+- ➕ **Agenda entrevista via calendar integration** (Google/Outlook/Cal.com)
+- ➕ Sugere 3 horários disponíveis → user aprova → confirma com recrutador
+- ➕ Adiciona à agenda automaticamente
+
+### v3.0 — 12+ meses (avaliar)
+- 🟡 Pré-screening por voz IA (depende de aceitação de mercado e regulação)
+- 🟡 Negociação de salário assistida (sempre user-aprovado, nunca autônoma)
+- 🟡 Acompanhamento pós-entrevista (Star pergunta como foi, registra learnings)
+
+### NUNCA — limites permanentes (éticos e legais)
+- ✗ **Aceitar oferta de emprego sem user**
+- ✗ **Recusar oferta sem user**
+- ✗ **Negociar valores sem user aprovar**
+- ✗ **Falar com recrutador sem user revisar**
+- ✗ **Aplicar em vagas com match <70%** (mesmo se user pedir)
+- ✗ **Coletar dados sensíveis sem consentimento explícito**
+
+> **Esses limites são VALOR, não fraqueza.** Vendem segurança e ética como diferencial.
+
+---
+
+## 1.2 MODO TREINAMENTO DA STAR — 3 fases (mitigação R1)
+
+> **Risco mitigado:** primeira aplicação automática queima confiança em <2min se Star errar.  
+> **Solução:** progressão gradual de supervisão → autonomia. User constrói confiança vendo, não confiando cego.
+
+### Fase 1 — Co-pilot supervisionado (aplicações 1 a 3)
+- Star encontra a vaga e prepara tudo (CV adaptado, cover letter, respostas de form).
+- **Não envia.** Mostra preview side-by-side:
+  - Esquerda: CV original
+  - Direita: CV adaptado (com diff colorido — ver §7.1)
+  - Embaixo: cover letter editável + por quê dessa vaga
+- User ações: **Aprovar e enviar** · **Editar** · **Pular essa**
+- Cada ação treina Star: aprovação = positive signal · edição = aprende preferência · pular = aprende rejeição
+
+### Fase 2 — Auto-pilot com revisão (aplicações 4 a 7)
+- Star aplica automaticamente.
+- Notifica user em até 30s: *"Acabei de aplicar na X. Tá tudo certo? [Ver CV] [Tá ok]"*
+- **Janela de 15min pra cancelar** — Star envia email de retratação automaticamente se cancelar.
+- User pode dizer "não precisa me notificar mais" → vira full auto.
+
+### Fase 3 — Full auto (aplicação 8+)
+- Star aplica em silêncio.
+- Resumo no dashboard: "Apliquei em 12 vagas hoje".
+- Notifica só se: vaga top match (>95%) · recrutador respondeu · Star teve dúvida.
+
+### Schema/APIs
+```sql
+applications.training_phase     int    -- 1, 2 ou 3
+applications.cancelled_at       timestamptz
+applications.cancellation_email_sent boolean
+```
+- `POST /api/star/cancel-application/:id` — só funciona se <15min e fase 2
+- Tracking events: `application_approved` · `application_edited` · `application_skipped` · `application_cancelled`
+
+### Limites
+- ❌ Pular fase 1 (todo mundo passa pelas 3, mesmo power user)
+- ❌ Mostrar só score sem palavras (diff visual obrigatório)
+- ❌ Janela cancel >15min (passou de 1h queima reputação)
+
+---
+
+## 2. SEGMENTOS
+
+| Segmento | Definição | Acesso |
+|----------|-----------|--------|
+| Visitor | Não logado | Landing |
+| Trial | Dias 1-7 | Plano Pro completo (5 aplicações/dia) |
+| Trial Expirado | Dia 8+ sem assinar | Read-only: Pipeline, DNA, Anti-ATS, Comunidade. Star pausada. |
+| PRO | Assinante | Plano Pro completo |
+| LITE | Downgrade pós-cancel | 2 aplicações/dia, R$ 29/mês |
+| ELITE | (futuro) | Plano premium com mais aplicações |
+
+---
+
+## 2.1 DNA — Threshold de Ativação
+
+> Star precisa de informação mínima pra operar. Mas barrar usuário = perder venda.  
+> Solução: **2 níveis de DNA**.
+
+| Nível | Threshold | Star opera? | UX |
+|-------|-----------|-------------|----|
+| **Insuficiente** | <50% | ❌ Não ativa | Bloqueio com checklist visual: "Faltam: CV, 3 vagas favoritas, cargo alvo" |
+| **Mínimo** | 50-79% | ✅ Ativa **com avisos** | Banner amarelo persistente: *"Tô aplicando, mas posso chamar mais se completar meu briefing"* |
+| **Saudável** | 80%+ | ✅ Ativa silenciosa | Sem banner. Star opera confiante. |
+
+**Composição do DNA (% por componente):**
+
+| Componente | Peso | Como completa |
+|------------|------|---------------|
+| CV uploaded e parseado | 25% | Upload PDF/DOCX |
+| Cargo desejado + senioridade | 15% | Form simples |
+| Stack/skills declaradas | 15% | Tags |
+| 3+ vagas favoritadas (sinal de match) | 15% | Browsing inicial |
+| Pretensão salarial | 10% | Slider |
+| Modelo de trabalho (remoto/híbrido/presencial) | 10% | Radio |
+| Empresas-alvo OU empresas-evitar | 10% | Tags opcionais |
+
+**Tracking:** toda vaga aplicada com DNA <80% loga `low_dna_application`.  
+Analytics mostra correlação **DNA × callback rate × conversion rate**.  
+Munição pra investor: *"DNA 80%+ converte 3x mais que DNA 50%."*
+
+**Re-engagement gancho:** quando user com DNA <80% recebe primeira rejeição, Star fala em 1ª pessoa:  
+*"Hmm, essa não rolou. Quer que eu te ajude a completar meu briefing? Suas chances sobem ~40%."*
+
+---
+
+## 2.2 BÚSSOLA VIVA — 3 mecanismos de atualização (mitigação R2)
+
+> **Risco mitigado:** Bússola desatualiza silenciosamente, matchmaking piora, churn invisível.  
+> **Solução:** Bússola é organismo vivo, não formulário estático.
+
+### Mecanismo 1 — Edit-on-click (chips clicáveis)
+- Cada chip da Bússola (cargo, salário, modelo, stack) tem ícone de edit.
+- Click → Star pergunta **uma coisa** em 20s: *"Mudou seu salário-alvo? Hoje tá em R$ 10k. Tá certo ainda?"*
+- Resposta em 1 toque (slider · sim/não · dropdown). Sem conversa.
+
+### Mecanismo 2 — Trigger por evento (auto-questionamento)
+Bússola se auto-questiona quando detecta sinais reais:
+
+| Sinal | Pergunta da Star |
+|-------|------------------|
+| 3 rejeições seguidas com mesmo motivo | *"Tão te mandando pra senior demais. Ajusto pra pleno?"* |
+| 5 dias sem aplicar | *"Faz 5 dias que não acho vaga boa. Refresca tua Bússola?"* |
+| User curte vaga fora do filtro | *"Curtiu uma de remoto SP. Tua Bússola tá em remoto BR. Atualiza?"* |
+| 2 entrevistas marcadas, nenhuma fechada | *"O que tá pegando nas entrevistas? Quer ajustar a busca?"* |
+
+### Mecanismo 3 — Refresh trimestral obrigatório
+- A cada 90 dias, modal soft: *"Vou pausar 1 dia até confirmar tua Bússola. Vida muda."*
+- 5 perguntas em 60s (chips). Sem conversa.
+- Se user adia 3x → Star reduz aplicações pra **30%** até refresh.
+
+### Schema
+```sql
+bussola.last_refreshed_at        timestamptz
+bussola.next_refresh_due_at      timestamptz
+bussola.refresh_skipped_count    int
+```
+Triggers de evento como **jobs no backend**, não no front.
+
+### Limites
+- ❌ Push genérico "Atualize sua Bússola" (vira spam)
+- ❌ Forçar conversa de 3min mesmo no refresh (sempre chips)
+- ❌ Matching 100% se user adia 3x refresh (reduz 30%)
+
+---
+
+## 3. JORNADA — FLUXOGRAMA
+
+```
+[SIGNUP]
+  ↓
+[ONBOARDING]  →  trial_ends_at = +7 dias
+  ↓
+[ATIVAR STAR — cerimônia]  →  termo de aceite + botão único
+  ↓
+┌──────────────────────────────────────────────────┐
+│  TRIAL ATIVO (dias 1-7)                          │
+│                                                  │
+│  Dia 1-2 HOOK                                    │
+│    → Discovery Bar (topo, persistente)           │
+│    → Discovery Modal: 1ª ação real + 5min       │
+│      Cupom: STAR50 (50% OFF)                     │
+│                                                  │
+│  Dia 3-5 PRESSÃO                                 │
+│    → Bar continua                                 │
+│    → Day 5 Nudge: após Star aplicar              │
+│      Cupom: TRILHA30 (30% OFF)                   │
+│                                                  │
+│  Dia 6 ÚLTIMA RODADA                             │
+│    → Day 6 Modal: app open + métricas reais      │
+│      Cupom: STAR50_FINAL (50% OFF)               │
+│                                                  │
+│  Dia 7 LAST CHANCE                               │
+│    → Fullscreen modal                            │
+│      Cupom: MANTER_STAR (melhor oferta)          │
+│      2 planos: Mensal R$39 / Anual R$26/mês     │
+└──────────────────────────────────────────────────┘
+  ↓
+[DIA 8+ TRIAL EXPIRADO]
+  → Star pausada · faixa vermelha persistente
+  → App acessível em read-only
+  → TrialExpiredOverlay com contador real de perda
+  ↓
+[ASSINANTE PRO]
+  → trial_ends_at = NULL
+  → Star reativada · sem limites de plano
+  ↓
+[CANCEL ATTEMPT — mês 2+]
+  → Cancel Flow: 3 saves
+    1. Pausar 30 dias
+    2. Downgrade Lite R$29
+    3. "Fui contratado"
+  → Se cancela: winback D+7, D+30
+```
+
+---
+
+## 4. CUPONS
+
+| Código | Desconto | Disparo | Frame |
+|--------|----------|---------|-------|
+| `STAR50` | 50% 1º mês | 1ª ação real + 5min (dia 1-2) | Discovery Modal |
+| `TRILHA30` | 30% 1º mês | Após Star aplicar (dia 5) | Day 5 Nudge |
+| `STAR50_FINAL` | 50% 1º mês | App open dia 6 | Day 6 Modal |
+| `MANTER_STAR` | Melhor oferta (mensal 50% / anual 33%) | App open dia 7 | Last Chance |
+| `WINBACK60` | 60% 1º mês | E-mail D+7 / D+30 pós-expiração | Email |
+
+> **Cupons via feature flag** — admin alterna `STAR50 → STAR60` sem deploy. A/B test pronto.
+
+---
+
+## 5. MOMENTOS DO FUNIL — 9 frames
+
+| # | Frame | Trigger | Dismissable |
+|---|-------|---------|-------------|
+| 1 | Discovery Bar | Dia 1-2 (topo) | Sim, mas reaparece na próxima sessão |
+| 2 | Discovery Modal | 1ª ação real + 5min | Sim · 1x por conta |
+| 3 | Day 5 Nudge | Star aplicar em vaga, dia 5 | Sim · 1x por sessão |
+| 4 | Day 6 Modal | App open dia 6 | Sim · 1x por sessão |
+| 5 | Last Chance | App open dia 7 | Não auto · só clicando 2x |
+| 6 | Trial Expired | Dia 8+ qualquer ação Pro | Permanente · só sai assinando |
+| 7 | Upgrade Gate | Tentar acessar feature Pro | Não · feature trancada |
+| 8 | Cancel Flow | Click "cancelar assinatura" | Sim · escolhe opção ou cancela mesmo assim |
+| 9 | Winback Email | D+7 / D+30 pós-expiração | E-mail, não in-app |
+
+---
+
+## 6. SCHEMA DE BANCO
+
+```sql
+-- Plano + trial
+profiles (
+  id uuid PK,
+  subscription_tier text DEFAULT 'free',  -- 'free'|'lite'|'pro'|'elite'
+  stripe_customer_id text
+)
+
+user_profiles (
+  user_id uuid PK,
+  trial_ends_at timestamptz,
+  star_paused_at timestamptz,         -- pausa pelo usuário
+  star_paused_until timestamptz,      -- pausa 30d via cancel flow
+  onboarding_completed boolean,
+  termos_aceitos_at timestamptz       -- termo de aceite Auto-Apply
+)
+
+-- Aplicações (limite diário, audit trail)
+applications (
+  id uuid PK,
+  user_id uuid,
+  job_id text,
+  applied_at timestamptz,
+  origin text,   -- 'star_auto'|'one_tap'|'manual'
+  cv_version_id uuid,
+  cancelled boolean DEFAULT false
+)
+
+-- Tracking granular do funil
+conversion_events (
+  id uuid PK,
+  user_id uuid,
+  frame text,                -- 'discovery_modal'|'day5'|'day6'|'last_chance'...
+  event_type text,           -- 'shown'|'clicked_cta'|'dismissed'|'ignored'
+  coupon_shown text,
+  created_at timestamptz
+)
+
+-- Idempotência Stripe
+webhook_events (
+  event_id text PK,
+  event_type text,
+  status text                -- 'processing'|'processed'|'failed'
+)
+
+-- Subscriptions
+subscriptions (
+  user_id uuid,
+  stripe_subscription_id text,
+  tier text,
+  status text,               -- 'trialing'|'active'|'past_due'|'canceled'|'paused'
+  current_period_end timestamptz,
+  cancel_at_period_end boolean,
+  cancel_save_chosen text    -- 'pause_30d'|'downgrade_lite'|'hired'|null
+)
+```
+
+---
+
+## 7. APIs
+
+| Endpoint | Função |
+|----------|--------|
+| `GET /api/user/journey` | Plan, trial, star_status (active/paused/expired) |
+| `POST /api/funnel/event` | Log conversion_event (shown/clicked/dismissed/ignored) |
+| `POST /api/funnel/coupon` | Resolver cupom ativo via feature flag |
+| `POST /api/star/pause` | Pausar Star (user-initiated ou cancel-save) |
+| `POST /api/star/resume` | Reativar Star |
+| `POST /api/stripe/checkout` | Criar Stripe session com cupom |
+| `POST /api/stripe/webhook` | Processar eventos (8 tipos) |
+| `POST /api/cancel/save` | Registrar save_chosen ('pause_30d', 'downgrade_lite', 'hired') |
+
+---
+
+## 7.1 ANTI-ATS DIFF VIEWER (mitigação R5)
+
+> **Risco mitigado:** user não enxerga o que Star fez, score 78→91 não emociona.  
+> **Solução:** "Git for Humans" — diff visual colorido com explicação por mudança.
+
+### Tela: CV Side-by-side
+- Esquerda: CV original (parsed)
+- Direita: CV adaptado pra vaga
+- **Highlights coloridos:**
+  - 🟢 **Verde** — palavra/frase **adicionada** (ex: keyword da vaga)
+  - 🔵 **Azul** — palavra/frase **reformulada** (mesmo significado, melhor ATS)
+  - 🟡 **Amarelo** — palavra/frase **reordenada** (mesma info, posição diferente)
+  - 🔴 **Vermelho** — palavra/frase **removida** (contra-produtiva)
+
+### Hover em mudança → tooltip explica
+- *"Adicionei 'Kubernetes' porque a vaga pede 3x"*
+- *"Movi 'Liderança' pra primeira linha — palavra-chave do título"*
+- *"Removi 'PHP' porque pode confundir ATS pra vaga de Python"*
+
+### Score detalhado embaixo
+- ATS Match: 78% → 91% (+13)
+- Keywords: 5/12 → 11/12
+- Estrutura: ✓ Otimizada pra Workday
+
+### Ações
+- **Aprovar e enviar** (default)
+- **Reverter mudança X** (click no highlight, undo individual)
+- **Pedir Star pra refazer** (regenera com prompt diferente)
+
+### Backend
+```js
+parseResponse.changes = [
+  { type: 'add'|'reformulate'|'reorder'|'remove',
+    original_text, adapted_text, reason }
+]
+```
+Componente novo: `<CVDiff original adapted changes />`  
+Tracking: `diff_viewed` · `change_reverted` · `regeneration_requested`
+
+### Limites
+- ❌ Diff só de palavras isoladas (precisa contexto da frase)
+- ❌ Cores sem tooltip (sem "por quê" vira ruído)
+- ❌ "Aceitar tudo" sem mostrar diff primeiro (transparência > velocidade)
+
+---
+
+## 8. WEBHOOKS STRIPE
+
+| Evento | Ação |
+|--------|------|
+| `checkout.session.completed` | tier = 'pro', trial_ends_at = NULL, Star reativada |
+| `subscription.updated` | Atualizar tier (downgrade Lite, etc) |
+| `subscription.deleted` | tier = 'free', Star pausada |
+| `subscription.paused` | status = 'paused', Star pausada (cancel save: pause_30d) |
+| `invoice.payment_failed` | status = 'past_due', notificar in-app |
+| `invoice.payment_succeeded` | Confirmar renovação, log retention |
+| `customer.subscription.trial_will_end` | Notificar 3 dias antes |
+| `charge.refunded` | Audit log |
+
+---
+
+## 9. REGRAS DE UI
+
+| Elemento | Regra |
+|----------|-------|
+| **CTA conversão** | Sempre gradient roxo→azul `#a855f7 → #3b82f6` · sombra `0 8px 28px rgba(168,85,247,.35)` |
+| **CTA dismiss** | Texto cinza `rgba(255,255,255,.42)` · sem fundo · nunca chama atenção |
+| **Cor de perda** | `#ef4444` · usado **só** em perda real (Star pausa, vagas perdidas) |
+| **Cor de ganho** | `#22c55e` · check, "presente da Star", confirmações |
+| **Star avatar** | Pulse verde quando ativa · cinza quando pausada |
+| **Backdrop modal** | `rgba(5,10,20,.78)` + `backdrop-filter: blur(10px)` |
+| **Card modal** | `linear-gradient(180deg, #0F1B30, #0A1428)` · radius 18px |
+
+---
+
+## 10. TRIGGERS — REGRAS DE DISPARO
+
+```js
+// Discovery Modal — engagement signal, NÃO tempo cego
+shouldShowDiscovery() = (
+  trial_phase === 'early_bird'           // dia 1-2
+  && first_meaningful_action_at !== null // 1ª aplicação OU 1ª turbinar action
+  && minutes_since_action >= 5
+  && !discovery_offer_shown
+)
+
+// Day 5 — após Star aplicar
+shouldShowDay5() = (
+  trial_phase === 'mid_trial'
+  && days_left === 3
+  && star_just_applied
+  && !day5_shown_this_session
+)
+
+// Day 6 — app open
+shouldShowDay6() = (
+  trial_phase === 'mid_trial'
+  && days_left === 2
+  && is_first_app_open_today
+  && !day6_shown_this_session
+)
+
+// Last Chance — auto fullscreen
+shouldShowLastChance() = (
+  trial_phase === 'last_chance'
+  && days_left <= 1
+  // Sempre mostra. Só fecha clicando 2x.
+)
+```
+
+---
+
+## 11. CANCEL FLOW — 3 SAVES
+
+| Save | Mecânica | Custo Twive | Recuperação esperada |
+|------|----------|-------------|----------------------|
+| **Pausar 30 dias** | Star hibernação. Cobrança suspensa. Pipeline preservado. Auto-resume D+30. | Stripe pause | ~12% dos churners |
+| **Downgrade Lite** | R$ 29/mês · 2 aplicações/dia · 63% OFF do Pro. | Receita recorrente reduzida | ~10% |
+| **Fui contratado** | Pause permanente. Star arquiva e aprende com novo cargo. Email D+90 perguntando "como tá indo?" | Zero · vira lead winback | ~8% |
+| **Cancelar mesmo assim** | Stripe cancel · winback emails D+7, D+30 | — | ~5% via winback |
+
+> **Total esperado: 25-35% dos churners salvos.** Sem cancel flow: 0%.
+
+---
+
+## 12. WINBACK EMAILS
+
+| Quando | Assunto | Oferta |
+|--------|---------|--------|
+| **D+1 pós-expiração** | "Sua Star está em pausa" | Reativar (sem desconto) |
+| **D+7** | "14 vagas passaram sem você" | WINBACK60 (60% OFF 1º mês) |
+| **D+30** | "Última chance · sua Star vai ser arquivada" | WINBACK60 |
+| **D+90 (se 'fui contratado')** | "Como tá o novo trampo?" | Pesquisa NPS + reativar quando quiser |
+
+---
+
+## 13. EVENTOS DE ANALYTICS
+
+```js
+track('funnel_event', {
+  frame: 'discovery_modal' | 'day5' | 'day6' | 'last_chance' | 'trial_expired' | 'cancel_flow',
+  event_type: 'shown' | 'clicked_cta' | 'dismissed' | 'ignored' | 'save_chosen',
+  coupon: 'STAR50' | 'TRILHA30' | ...,
+  trial_day: 1-7,
+  user_metrics: { applications, callbacks, interviews }
+})
+```
+
+**Cohort views:**
+- Conversion rate por dia do trial (D1-D7)
+- Conversion rate por frame (qual modal converte mais)
+- Save rate por opção (pause_30d vs downgrade_lite)
+- Winback rate por timing (D+7 vs D+30)
+
+---
+
+## 14. ÉTICA — REGRAS INVIOLÁVEIS
+
+1. **Nunca inventar perda.** Se diz "14 vagas perdidas", precisam existir 14 vagas com match ≥85 que a Star teria aplicado.
+2. **Nunca esconder cancelar.** Botão sempre visível em 1 clique do flow.
+3. **Sempre permitir baixar dados.** Pipeline, CV, aplicações exportáveis em qualquer plano.
+4. **Cupom honesto.** Se R$ 39 é "1º mês", segundo mês é R$ 79 — informado claramente.
+5. **Sem auto-renovação anual surpresa.** Email 30 dias antes.
+6. **Pausa real é pausa real.** Pode ser 30d, depois retoma. Sem cobrar no meio.
+
+> Se a equipe de growth pede algo que viola essas 6 regras: **não fazer.** Receita curta vs reputação longa.
+
+---
+
+## 15. UPGRADES VS SPEC ORIGINAL
+
+| Mudança | Impacto |
+|---------|---------|
+| Trigger por engagement, não tempo cego | +18% conversion (estimado) |
+| Cancel flow com 3 saves | +25-35% retenção |
+| Métricas reais nos modais | +12% credibilidade |
+| Star em 1ª pessoa | +retenção emocional |
+| Cláusula ética inviolável | -churn de longo prazo por mau gosto |
+| Cupom via feature flag | A/B test sem deploy |
+| Tracking granular shown/clicked/dismissed/ignored | Otimização data-driven |
+| PT-BR + BRL nativo | Mercado-foco Brasil |
+| Plano Lite como save | Recupera 10% que iam embora |
+
+---
+
+## 16. DECISÕES REGISTRADAS
+
+### Q1/Q2/Q3
+| # | Pergunta | Decisão | Onde mora no spec |
+|---|----------|---------|-------------------|
+| Q1 | Nome do produto | Twive (codinome). Validar com 5-10 usuários pré-MVP | Header |
+| Q2 | O que a Star (não) faz | v1 = só aplica · v1.5 responde · v2 agenda · NUNCA aceita/recusa/negocia sozinha | §1.1 Roadmap |
+| Q3 | DNA mínimo pra ativar | 50% mínimo · 80% saudável · banner persistente entre 50-79% | §2.1 DNA Threshold |
+
+### Riscos mitigados (R1, R2, R5)
+| # | Risco | Mitigação | Onde mora |
+|---|-------|-----------|-----------|
+| R1 | Primeira aplicação queima confiança | Modo Treinamento 3 fases · diff visual · janela cancel 15min | §1.2 |
+| R2 | Bússola estática vira churn silencioso | Edit-on-click · triggers por evento · refresh 90d | §2.2 |
+| R5 | User não vê o que Star fez no CV | Diff Viewer colorido · tooltip por mudança · undo individual | §7.1 |
+
+### Ordem de execução recomendada
+1. **R5** (Diff Viewer) — barato, vende, ensina user. MVP.
+2. **R1** (Modo Treinamento) — crítico, complexo. MVP.
+3. **R2** (Bússola viva) — refinement, pós-MVP.
+
+---
+
+**Fim do spec.** Próximo passo: riscos R1, R2, R5.

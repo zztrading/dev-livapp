@@ -1,6 +1,7 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useOnboardingV2, V2QuestionId } from "@/hooks/useOnboardingV2";
+import type { DominioLevel } from "@/components/onboarding-v2/mini-experience/useMiniExperience";
 import { OnboardingV2Loading } from "./OnboardingV2Loading";
 import { LivIntroScreen } from "./screens/LivIntroScreen";
 import { AttributionScreen } from "./screens/AttributionScreen";
@@ -10,20 +11,14 @@ import { PromiseScreen } from "./screens/PromiseScreen";
 import { DailyGoalScreen } from "./screens/DailyGoalScreen";
 import { NotificationPrimerScreen } from "./screens/NotificationPrimerScreen";
 import { PromptKnowledgeScreen } from "./screens/PromptKnowledgeScreen";
-
-// Placeholders pras telas que vêm nas próximas sprints
-const Placeholder = ({ title }: { title: string }) => (
-  <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
-    <p className="text-xs text-muted-foreground uppercase tracking-widest mb-2">
-      Em construção
-    </p>
-    <h1 className="text-2xl font-bold text-foreground">{title}</h1>
-  </div>
-);
+import { RevealScreen } from "./screens/RevealScreen";
+import { SignupDeferredScreen } from "./screens/SignupDeferredScreen";
+import { MiniExperienceFlow } from "./mini-experience/MiniExperienceFlow";
 
 export const OnboardingV2Flow = () => {
   const {
     ready,
+    sessionId,
     step,
     stepIndex,
     totalSteps,
@@ -34,6 +29,12 @@ export const OnboardingV2Flow = () => {
     goNext,
     goBack,
   } = useOnboardingV2();
+
+  // Resultado do mini-experience (passado pra RevealScreen)
+  const [miniResult, setMiniResult] = useState<{
+    score: number;
+    level: DominioLevel;
+  } | null>(null);
 
   // Track view do step atual
   useEffect(() => {
@@ -55,14 +56,16 @@ export const OnboardingV2Flow = () => {
 
   return (
     <div className="min-h-screen bg-white text-slate-900">
-      {/* Progress bar global */}
-      <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-slate-100">
-        <div
-          className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-500"
-          style={{ width: `${progressPercent}%` }}
-          aria-label={`Etapa ${stepIndex + 1} de ${totalSteps}`}
-        />
-      </div>
+      {/* Progress bar global (oculta no mini-experience que tem barra própria) */}
+      {step !== "mini_experience" && (
+        <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-slate-100">
+          <div
+            className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-500"
+            style={{ width: `${progressPercent}%` }}
+            aria-label={`Etapa ${stepIndex + 1} de ${totalSteps}`}
+          />
+        </div>
+      )}
 
       <main role="main" className="pt-1">
         <AnimatePresence mode="wait">
@@ -133,9 +136,29 @@ export const OnboardingV2Flow = () => {
             />
           )}
 
-          {step === "mini_experience" && <Placeholder key="mini_experience" title="Tela 10 — Sua primeira IA" />}
-          {step === "reveal" && <Placeholder key="reveal" title="Tela 11 — Você fez!" />}
-          {step === "signup_deferred" && <Placeholder key="signup_deferred" title="Tela 12 — Criar perfil" />}
+          {step === "mini_experience" && (
+            <MiniExperienceFlow
+              key="mini_experience"
+              sessionId={sessionId}
+              onComplete={(result) => {
+                setMiniResult(result);
+                goNext();
+              }}
+            />
+          )}
+
+          {step === "reveal" && (
+            <RevealScreen
+              key="reveal"
+              dominioScore={miniResult?.score}
+              dominioLevel={miniResult?.level}
+              sessionId={sessionId}
+              onContinue={goNext}
+            />
+          )}
+          {step === "signup_deferred" && (
+            <SignupDeferredScreen key="signup_deferred" sessionId={sessionId} />
+          )}
         </AnimatePresence>
       </main>
     </div>

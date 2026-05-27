@@ -177,12 +177,42 @@ const Auth = () => {
       }
 
       if (data.session) {
+        // Se veio do quiz pré-signup (Onboarding V2), linka respostas
+        // anônimas à conta criada via RPC link_onboarding_v2_to_user.
+        const fromQuiz = searchParams.get('from') === 'quiz';
+        if (fromQuiz) {
+          const cookieMatch = document.cookie.match(
+            /(?:^|; )yesliv_quiz_session=([^;]*)/,
+          );
+          const quizSessionId = cookieMatch
+            ? decodeURIComponent(cookieMatch[1])
+            : null;
+          if (quizSessionId) {
+            try {
+              await supabase.rpc('link_onboarding_v2_to_user', {
+                p_session_id: quizSessionId,
+                p_user_id: data.session.user.id,
+              });
+            } catch (linkErr) {
+              // Falha silenciosa — não bloqueia o signup, mas loga.
+              console.warn('[Auth] link_onboarding_v2_to_user failed', linkErr);
+            }
+          }
+        }
+
         toast({
           title: "Conta criada com sucesso!",
           description: "Vamos começar sua jornada! 🚀",
         });
-        // Honor returnTo (e.g. /onboarding/finish from anonymous flow); otherwise go to onboarding.
-        const dest = returnTo && returnTo.startsWith('/') ? returnTo : '/onboarding';
+
+        // Quem veio do quiz pré-signup já fez todo o onboarding — vai direto pro dashboard.
+        // Honra returnTo se vier explicitamente; senão padrão é onboarding antigo.
+        const dest =
+          returnTo && returnTo.startsWith('/')
+            ? returnTo
+            : fromQuiz
+              ? '/dashboard'
+              : '/onboarding';
         navigate(dest);
       }
     } catch (error: any) {

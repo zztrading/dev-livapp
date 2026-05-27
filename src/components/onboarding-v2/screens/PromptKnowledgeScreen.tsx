@@ -1,10 +1,11 @@
 import { motion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import { LivCornerAvatar } from "../LivCornerAvatar";
+import { useSingleChoiceGate } from "../useSingleChoiceGate";
 
 interface PromptKnowledgeScreenProps {
   selected?: string;
-  onSelect: (value: string) => void;
+  onSelect: (value: string) => void | Promise<void>;
   onBack?: () => void;
 }
 
@@ -30,7 +31,9 @@ export const PromptKnowledgeScreen = ({
   selected,
   onSelect,
   onBack,
-}: PromptKnowledgeScreenProps) => (
+}: PromptKnowledgeScreenProps) => {
+  const gate = useSingleChoiceGate(onSelect, selected);
+  return (
   <motion.div
     initial={{ opacity: 0, y: 16 }}
     animate={{ opacity: 1, y: 0 }}
@@ -67,18 +70,19 @@ export const PromptKnowledgeScreen = ({
     {/* 2 cards grandes */}
     <div className="max-w-md w-full mx-auto flex flex-col gap-3 flex-1">
       {OPTIONS.map((opt) => {
-        const isSelected = selected === opt.value;
+        const isSelected = gate.selected === opt.value;
         return (
           <motion.button
             key={opt.value}
             type="button"
-            onClick={() => onSelect(opt.value)}
-            whileTap={{ scale: 0.98 }}
+            onClick={() => gate.handlePick(opt.value)}
+            disabled={gate.isLocked}
+            whileTap={!gate.isLocked ? { scale: 0.98 } : undefined}
             className={`w-full flex items-center gap-4 px-5 py-5 rounded-2xl border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 ${
               isSelected
                 ? "border-indigo-500 bg-indigo-50 shadow-sm"
                 : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30"
-            }`}
+            } ${gate.isLocked && !isSelected ? "opacity-40 cursor-not-allowed" : ""} ${gate.isLocked ? "cursor-not-allowed" : ""}`}
           >
             <span className="text-4xl flex-shrink-0" aria-hidden="true">
               {opt.emoji}
@@ -94,4 +98,5 @@ export const PromptKnowledgeScreen = ({
       })}
     </div>
   </motion.div>
-);
+  );
+};

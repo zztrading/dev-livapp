@@ -1,9 +1,10 @@
 import { ChoiceCard } from "../ChoiceCard";
 import { QuestionLayout } from "../QuestionLayout";
+import { useSingleChoiceGate } from "../useSingleChoiceGate";
 
 interface MotivationScreenProps {
   selected?: string;
-  onSelect: (value: string) => void;
+  onSelect: (value: string) => void | Promise<void>;
   onBack?: () => void;
 }
 
@@ -19,20 +20,24 @@ export const MotivationScreen = ({
   selected,
   onSelect,
   onBack,
-}: MotivationScreenProps) => (
-  <QuestionLayout
-    question="O que mais quer alcançar?"
-    subtitle="Vamos personalizar sua trilha pra esse objetivo."
-    onBack={onBack}
-  >
-    {OPTIONS.map((opt) => (
-      <ChoiceCard
-        key={opt.value}
-        emoji={opt.emoji}
-        label={opt.label}
-        selected={selected === opt.value}
-        onClick={() => onSelect(opt.value)}
-      />
-    ))}
-  </QuestionLayout>
-);
+}: MotivationScreenProps) => {
+  const gate = useSingleChoiceGate(onSelect, selected);
+  return (
+    <QuestionLayout
+      question="O que mais quer alcançar?"
+      subtitle="Vamos personalizar sua trilha pra esse objetivo."
+      onBack={onBack}
+    >
+      {OPTIONS.map((opt) => (
+        <ChoiceCard
+          key={opt.value}
+          emoji={opt.emoji}
+          label={opt.label}
+          selected={gate.selected === opt.value}
+          disabled={gate.isLocked}
+          onClick={() => gate.handlePick(opt.value)}
+        />
+      ))}
+    </QuestionLayout>
+  );
+};

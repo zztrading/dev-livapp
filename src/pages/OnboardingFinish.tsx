@@ -49,9 +49,9 @@ const OnboardingFinish = () => {
       } catch (err) {
         console.error('[OnboardingFinish] flush failed:', err);
         clearAnonState();
+      } finally {
+        navigate('/dashboard', { replace: true });
       }
-
-      navigate('/dashboard', { replace: true });
     };
 
     finish();

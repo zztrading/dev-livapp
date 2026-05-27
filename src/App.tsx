@@ -116,6 +116,7 @@ const C10Report = lazyRetry(() => import("./pages/admin/C10Report"));
 const LessonReportsAdmin = lazyRetry(() => import("./pages/admin/LessonReportsAdmin"));
 const AdminUserManagement = lazyRetry(() => import("./pages/AdminUserManagement"));
 const AdminImageLab = lazyRetry(() => import("./pages/AdminImageLab"));
+const AdminUauImagesGen = lazyRetry(() => import("./pages/AdminUauImagesGen"));
 const AdminAudioPreview = lazyRetry(() => import("./pages/AdminAudioPreview"));
 const AdminLessonRatings = lazyRetry(() => import("./pages/AdminLessonRatings"));
 const AdminExerciseAudit = lazyRetry(() => import("./pages/AdminExerciseAudit"));
@@ -271,6 +272,7 @@ const App = () => (
                 <Route path="/admin/contracts" element={<AdminRoute><AdminContracts /></AdminRoute>} />
                 <Route path="/admin/c10-report" element={<AdminRoute><C10Report /></AdminRoute>} />
                 <Route path="/admin/image-lab" element={<AdminRoute><AdminImageLab /></AdminRoute>} />
+                <Route path="/admin/uau-images-gen" element={<AdminRoute><AdminUauImagesGen /></AdminRoute>} />
                 <Route path="/admin/micro-visual" element={<AdminRoute><AdminMicroVisualSandbox /></AdminRoute>} />
                 <Route path="/admin/audio-preview" element={<AdminRoute><AdminAudioPreview /></AdminRoute>} />
                 <Route path="/admin/ratings" element={<AdminRoute><AdminLessonRatings /></AdminRoute>} />

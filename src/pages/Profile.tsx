@@ -486,10 +486,10 @@ export default function Profile() {
                 {subscriptionStatusLabel && (
                   <p className="text-sm text-amber-600 mb-4 font-medium">
                     {subscriptionStatusLabel}
-                  </p>
+                </p>
                 )}
                 {!subscriptionStatusLabel && <div className="mb-4" />}
-                <Button
+                <Button 
                   className="w-full"
                   onClick={() => navigate('/pricing')}
                 >

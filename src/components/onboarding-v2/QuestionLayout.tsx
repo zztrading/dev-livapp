@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import { LivCornerAvatar } from "./LivCornerAvatar";
@@ -23,6 +23,12 @@ export const QuestionLayout = ({
   onBack,
   children,
 }: QuestionLayoutProps) => {
+  // Foco na pergunta ao montar — leitor de tela anuncia a nova etapa (a11y)
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [question]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -49,7 +55,11 @@ export const QuestionLayout = ({
 
       {/* Pergunta */}
       <div className="max-w-md w-full mx-auto mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug focus:outline-none"
+        >
           {question}
         </h1>
         {subtitle && (

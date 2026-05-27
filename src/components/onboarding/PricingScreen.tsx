@@ -48,7 +48,7 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
       setPendingPlan(planId);
       toast({
         title: `Plano ${planName} reservado!`,
-        description: 'Crie sua conta para finalizar o pagamento.',
+        description: 'Crie sua conta para liberar seu acesso.',
       });
       setTimeout(() => navigate('/auth?mode=signup&returnTo=/onboarding/finish'), 600);
       return;
@@ -60,11 +60,11 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
       window.location.href = url;
     } catch (err) {
       setCheckoutPlanId(null);
-      toast({
+    toast({
         title: 'Erro ao iniciar pagamento',
         description: err instanceof Error ? err.message : 'Tente novamente em instantes.',
         variant: 'destructive',
-      });
+    });
     }
   };
 
@@ -79,10 +79,10 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
     highlighted?: boolean;
   }> = [
     { id: 'starter', name: 'Starter', oldPrice: 'R$ 194,00', newPrice: 'R$ 97,00', perDay: 'R$ 3,23/dia' },
-    {
+    { 
       id: 'pro',
       name: 'Pro',
-      badge: '👑 MAIS POPULAR!',
+      badge: '👑 MAIS POPULAR!', 
       oldPrice: 'R$ 394,00',
       newPrice: 'R$ 197,00',
       perDay: 'R$ 6,57/dia',
@@ -121,8 +121,8 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
         {/* Plans */}
         <div className="grid md:grid-cols-3 gap-6 mb-8">
           {plans.map((plan, i) => (
-            <div
-              key={i}
+            <div 
+              key={i} 
               className={`bg-white p-6 rounded-xl shadow-lg transition-transform ${
                 plan.highlighted ? 'ring-4 ring-blue-500 scale-105' : ''
               }`}
@@ -139,8 +139,8 @@ export const PricingScreen = ({ profile, isAuthenticated = true }: PricingScreen
                 <div className="text-gray-600">{plan.perDay}</div>
               </div>
               {plan.savings && <p className="text-green-600 font-semibold mb-4">💰 {plan.savings}</p>}
-              <Button
-                className="w-full"
+              <Button 
+                className="w-full" 
                 variant={plan.highlighted ? "default" : "outline"}
                 disabled={checkoutPlanId !== null}
                 onClick={() => handleSelectPlan(plan.id, plan.name)}

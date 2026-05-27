@@ -1,5 +1,9 @@
 project_id = "pspvppymcdjbwsudxzdx"
 
+[functions.admin-image-gen]
+verify_jwt = false
+
+
 [functions.analyze-audio-quality]
 verify_jwt = false
 
@@ -181,9 +185,3 @@ verify_jwt = false
 [functions.v10-suggest-topics]
 verify_jwt = false
 
-# ─── Stripe billing ───
-[functions.create-checkout-session]
-verify_jwt = true
-
-[functions.stripe-webhook]
-verify_jwt = false

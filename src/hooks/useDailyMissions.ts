@@ -71,7 +71,7 @@ export function useDailyMissions() {
       // nightly with CRON_SECRET / service-role auth). We do NOT call it from
       // the client — it requires admin auth and batch-generates for all users.
       // If today's missions don't exist yet, show empty state until cron runs.
-      setMissions(missionsData || []);
+        setMissions(missionsData || []);
 
       // Fase 3: Filter rewards to only uncollected (avoids fetching hundreds of rows)
       const { data: rewardsData, error: rewardsError } = await supabase
