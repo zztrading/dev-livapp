@@ -195,3 +195,6 @@ verify_jwt = false
 [functions.change-subscription-plan]
 verify_jwt = true
 
+[functions.create-customer-portal-session]
+verify_jwt = true
+

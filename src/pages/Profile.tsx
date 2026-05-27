@@ -11,6 +11,7 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { useUserGamification } from '@/hooks/useUserGamification';
 import { useSubscription, isSubscriptionActive } from '@/hooks/useSubscription';
+import { openCustomerPortal } from '@/services/billing';
 import { useToast } from '@/hooks/use-toast';
 import { 
   User, 
@@ -49,6 +50,7 @@ export default function Profile() {
   const [uploading, setUploading] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
   
   const [profile, setProfile] = useState({
     name: '',
@@ -489,12 +491,39 @@ export default function Profile() {
                 </p>
                 )}
                 {!subscriptionStatusLabel && <div className="mb-4" />}
-                <Button 
+                <Button
                   className="w-full"
                   onClick={() => navigate('/pricing')}
                 >
-                  {activePlanId ? 'Gerenciar Plano' : 'Fazer Upgrade'}
+                  {activePlanId ? 'Trocar de Plano' : 'Fazer Upgrade'}
                 </Button>
+                {activePlanId && (
+                  <Button
+                    variant="outline"
+                    className="w-full mt-2"
+                    disabled={portalLoading}
+                    onClick={async () => {
+                      setPortalLoading(true);
+                      try {
+                        await openCustomerPortal();
+                      } catch (err) {
+                        setPortalLoading(false);
+                        toast({
+                          title: 'Erro ao abrir gerenciamento',
+                          description: err instanceof Error ? err.message : 'Tente novamente.',
+                          variant: 'destructive',
+                        });
+                      }
+                    }}
+                  >
+                    {portalLoading ? 'Abrindo...' : 'Gerenciar Assinatura'}
+                  </Button>
+                )}
+                {activePlanId && (
+                  <p className="text-xs text-gray-500 mt-3">
+                    Cancele, atualize cartão ou veja notas fiscais
+                  </p>
+                )}
               </div>
             </Card>
 

@@ -97,3 +97,22 @@ export function downgradeSubscription(planId: PlanId | string): Promise<PlanChan
 export function cancelScheduledDowngrade(): Promise<PlanChangeResult> {
   return invokePlanChange('cancel_downgrade');
 }
+
+// ─── Stripe Customer Portal (cancel, update card, view invoices) ─────────────
+
+/**
+ * Opens the Stripe-hosted Customer Portal in the current tab.
+ * Stripe handles cancellation, payment-method updates, invoice viewing, etc.
+ * On exit the user returns to /profile (configured server-side).
+ */
+export async function openCustomerPortal(): Promise<void> {
+  const { data, error } = await supabase.functions.invoke<{ url: string }>(
+    'create-customer-portal-session',
+    { body: {} },
+  );
+
+  if (error) throw new Error(error.message || 'Failed to open customer portal');
+  if (!data?.url) throw new Error('Customer portal returned no URL');
+
+  window.location.href = data.url;
+}

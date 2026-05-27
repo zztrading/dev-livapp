@@ -2,9 +2,16 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, GraduationCap, Lock, Star, Clock, BookOpen } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { useEntitlement } from '@/hooks/useEntitlement';
 
 export default function CursoExclusivo() {
   const navigate = useNavigate();
+
+  // Derive module unlock from entitlements:
+  //   pro_lessons  → Módulos 1, 2 (Pro tier)
+  //   elite_lessons → Módulos 3, 4, 5 (Elite tier)
+  const { allowed: hasProAccess } = useEntitlement('pro_lessons');
+  const { allowed: hasEliteAccess } = useEntitlement('elite_lessons');
 
   return (
     <div className="min-h-screen bg-[#FAFBFC]">
@@ -146,32 +153,32 @@ export default function CursoExclusivo() {
                 title: 'Módulo 1: Fundamentos Avançados de IA',
                 lessons: 12,
                 duration: '4h',
-                locked: false
+                locked: !hasProAccess,
               },
               {
                 title: 'Módulo 2: Prompt Engineering Profissional',
                 lessons: 10,
                 duration: '3.5h',
-                locked: true
+                locked: !hasProAccess,
               },
               {
                 title: 'Módulo 3: Automação com IA',
                 lessons: 15,
                 duration: '5h',
-                locked: true
+                locked: !hasEliteAccess,
               },
               {
                 title: 'Módulo 4: IA para Negócios',
                 lessons: 8,
                 duration: '3h',
-                locked: true
+                locked: !hasEliteAccess,
               },
               {
                 title: 'Módulo 5: Projetos Práticos',
                 lessons: 5,
                 duration: '4.5h',
-                locked: true
-              }
+                locked: !hasEliteAccess,
+              },
             ].map((modulo, index) => (
               <div
                 key={index}

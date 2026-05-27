@@ -1,0 +1,84 @@
+-- Entitlement RLS policies — TEMPLATE
+--
+-- This migration shows the PATTERN for gating paid content by subscription
+-- status + plan tier. It does NOT actually apply policies to any specific
+-- content table, because the content inventory (which tables map to which
+-- plan) is a product decision still pending.
+--
+-- TODO(product): for each gated table (likely v10_lessons, v8_lessons, etc.),
+-- decide:
+--   1. Which plan tier unlocks it (pro_lessons, elite_lessons, etc.)
+--   2. Whether existing policies need to be DROPPED first
+-- Then copy the pattern below and customize.
+--
+-- See LAUNCH-READINESS-PLAN.md §1 for context.
+
+-- ─── PATTERN 1: any active subscriber can read ─────────────────────────────
+-- For content that is "paid" but tier-agnostic.
+--
+-- create policy "<table>_subscriber_read"
+-- on public.<table>
+-- for select
+-- using (
+--   exists (
+--     select 1 from public.subscriptions s
+--     where s.user_id = auth.uid()
+--       and s.status in ('active', 'trialing', 'past_due')  -- past_due = grace window
+--   )
+-- );
+
+-- ─── PATTERN 2: only Pro+ subscribers can read ─────────────────────────────
+-- For tiered content (Pro unlocks; Elite also has access).
+--
+-- create policy "<table>_pro_read"
+-- on public.<table>
+-- for select
+-- using (
+--   exists (
+--     select 1 from public.subscriptions s
+--     where s.user_id = auth.uid()
+--       and s.status in ('active', 'trialing', 'past_due')
+--       and s.plan_id in ('pro', 'elite')
+--   )
+-- );
+
+-- ─── PATTERN 3: only Elite subscribers can read ────────────────────────────
+-- For top-tier exclusive content.
+--
+-- create policy "<table>_elite_read"
+-- on public.<table>
+-- for select
+-- using (
+--   exists (
+--     select 1 from public.subscriptions s
+--     where s.user_id = auth.uid()
+--       and s.status in ('active', 'trialing', 'past_due')
+--       and s.plan_id = 'elite'
+--   )
+-- );
+
+-- ─── EXAMPLE: gating v10_lessons to Pro+ subscribers ───────────────────────
+-- Uncomment + adjust once product confirms v10 is a Pro feature:
+--
+-- alter table public.v10_lessons enable row level security;
+--
+-- drop policy if exists "Public can read published v10_lessons" on public.v10_lessons;
+-- drop policy if exists "v10_lessons_public_read_published" on public.v10_lessons;
+--
+-- create policy "v10_lessons_pro_read"
+-- on public.v10_lessons
+-- for select
+-- using (
+--   status = 'published'
+--   and exists (
+--     select 1 from public.subscriptions s
+--     where s.user_id = auth.uid()
+--       and s.status in ('active', 'trialing', 'past_due')
+--       and s.plan_id in ('pro', 'elite')
+--   )
+-- );
+
+-- This migration intentionally applies NO changes — it is documentation only.
+-- The frontend EntitlementGate component will gate UX immediately; backend
+-- RLS becomes the security boundary once the patterns above are applied.
+select 1 as template_only;

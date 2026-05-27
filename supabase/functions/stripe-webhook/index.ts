@@ -336,4 +336,35 @@ async function handleInvoiceFailed(invoice: Stripe.Invoice): Promise<void> {
 
   if (error) throw error;
   console.log(`[stripe-webhook] Subscription past_due for customer=${customerId}`);
+
+  // Send the user a branded "update your card" email (best-effort)
+  if (invoice.customer_email) {
+    try {
+      // Look up plan name for friendlier email copy
+      const { data: sub } = await supabase
+        .from("subscriptions")
+        .select("plan_id")
+        .eq("stripe_customer_id", customerId)
+        .maybeSingle();
+      let planName = "Plano";
+      if (sub?.plan_id) {
+        const { data: plan } = await supabase
+          .from("plans")
+          .select("name")
+          .eq("id", sub.plan_id)
+          .maybeSingle();
+        if (plan?.name) planName = plan.name;
+      }
+
+      await sendPaymentFailedEmail({
+        to: invoice.customer_email,
+        planName,
+        amountBrl: invoice.amount_due / 100,
+        appUrl: Deno.env.get("APP_URL") ?? "https://dev-livapp.vercel.app",
+      });
+    } catch (err) {
+      console.error("[stripe-webhook] sendPaymentFailedEmail failed:", err);
+      // Don't rethrow — the past_due update succeeded, banner will show in app
+    }
+  }
 }

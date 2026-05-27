@@ -1,0 +1,78 @@
+name: PR Check
+
+# Gates production deploys: GitHub branch protection on `main` requires these
+# jobs to pass before a PR can merge. Vercel deploys to production only on push
+# to main, so a red CI here transitively blocks the production deploy.
+#
+# Vercel still runs Preview deploys on every PR commit in parallel — those are
+# not gated by this workflow (by design, so reviewers can click around the UI
+# without waiting on tests).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+
+  typecheck:
+    name: TypeScript check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+
+  # Note: no `build` job — Vercel runs the build on every PR + push to main
+  # via its GitHub integration. Duplicating it here wastes CI minutes.
+
+  test-unit:
+    name: Unit tests (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run test:unit
+
+  deno-check:
+    name: Deno check (Edge Functions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      - name: Type-check all Edge Functions
+        run: |
+          set -e
+          # Only check function entry points (index.ts). Edge functions are
+          # deployed manually to Supabase — this just catches syntax errors
+          # locally before someone runs `supabase functions deploy ...`.
+          for f in supabase/functions/*/index.ts; do
+            echo "▶ Checking $f"
+            deno check "$f" || exit 1
+          done
