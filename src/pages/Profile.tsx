@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { useUserGamification } from '@/hooks/useUserGamification';
+import { useSubscription, isSubscriptionActive } from '@/hooks/useSubscription';
 import { useToast } from '@/hooks/use-toast';
 import { 
   User, 
@@ -42,6 +43,7 @@ export default function Profile() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { stats } = useUserGamification();
+  const { data: subscription } = useSubscription();
   
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -201,11 +203,31 @@ export default function Profile() {
     }
   };
 
-  const planNames = {
-    basico: 'Básico',
+  // Plan label map — covers current Stripe plan IDs (starter/pro/elite) plus
+  // legacy users.plan values (basico/pro/ultra) for users without a Stripe sub yet.
+  const planNames: Record<string, string> = {
+    starter: 'Starter',
     pro: 'Pro',
-    ultra: 'Ultra'
+    elite: 'Elite',
+    basico: 'Básico',
+    ultra: 'Ultra',
   };
+
+  // Live plan from Stripe-synced subscriptions table (preferred) → fallback to users.plan
+  const activePlanId = isSubscriptionActive(subscription) ? subscription?.plan_id ?? null : null;
+  const displayPlanId = activePlanId ?? profile.plan;
+  const displayPlanName = planNames[displayPlanId] ?? 'Sem plano';
+
+  // Friendly status text for non-active subscription states
+  const subscriptionStatusLabel = (() => {
+    if (!subscription) return null;
+    switch (subscription.status) {
+      case 'past_due':  return '⚠️ Pagamento pendente — atualize seu cartão para continuar';
+      case 'canceled':  return 'Sua assinatura foi cancelada';
+      case 'inactive':  return null;
+      default:          return null;
+    }
+  })();
 
   if (loading || !currentUser) {
     return (
@@ -456,16 +478,22 @@ export default function Profile() {
               
               <div className="text-center py-6">
                 <Badge className="text-lg px-4 py-2 mb-4">
-                  {planNames[profile.plan as keyof typeof planNames]}
+                  {displayPlanName}
                 </Badge>
-                <p className="text-sm text-gray-500 mb-6">
-                  Você está no plano {planNames[profile.plan as keyof typeof planNames]}
+                <p className="text-sm text-gray-500 mb-2">
+                  Você está no plano {displayPlanName}
                 </p>
-                <Button 
+                {subscriptionStatusLabel && (
+                  <p className="text-sm text-amber-600 mb-4 font-medium">
+                    {subscriptionStatusLabel}
+                  </p>
+                )}
+                {!subscriptionStatusLabel && <div className="mb-4" />}
+                <Button
                   className="w-full"
-                  onClick={() => navigate('/curso-exclusivo')}
+                  onClick={() => navigate('/pricing')}
                 >
-                  Gerenciar Plano
+                  {activePlanId ? 'Gerenciar Plano' : 'Fazer Upgrade'}
                 </Button>
               </div>
             </Card>
