@@ -11,6 +11,10 @@ export interface Subscription {
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   updated_at: string;
+  // Scheduled plan change (downgrade) — null when none pending
+  pending_plan_id: string | null;
+  pending_change_at: string | null;
+  stripe_subscription_schedule_id: string | null;
 }
 
 /**

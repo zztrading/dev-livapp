@@ -229,14 +229,27 @@ async function handleSubscriptionChange(sub: Stripe.Subscription): Promise<void>
   const userId = sub.metadata?.user_id;
   const planId = sub.metadata?.plan_id;
 
-  let query = supabase
-    .from("subscriptions")
-    .update({
-      status: sub.status,
-      current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
-      cancel_at_period_end: sub.cancel_at_period_end,
-      ...(planId ? { plan_id: planId } : {}),
-    });
+  // If Stripe reports no schedule attached, any pending plan change has either
+  // been canceled (release) or already transitioned (phase 2 took over). In
+  // both cases we clear the pending_* fields. If a schedule is still attached,
+  // we leave them as set by change-subscription-plan.
+  const hasSchedule = typeof sub.schedule === "string"
+    ? !!sub.schedule
+    : !!sub.schedule?.id;
+
+  const patch: Record<string, unknown> = {
+    status: sub.status,
+    current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+    cancel_at_period_end: sub.cancel_at_period_end,
+  };
+  if (planId) patch.plan_id = planId;
+  if (!hasSchedule) {
+    patch.pending_plan_id = null;
+    patch.pending_change_at = null;
+    patch.stripe_subscription_schedule_id = null;
+  }
+
+  let query = supabase.from("subscriptions").update(patch);
 
   if (userId) {
     query = query.eq("user_id", userId);
@@ -246,7 +259,7 @@ async function handleSubscriptionChange(sub: Stripe.Subscription): Promise<void>
 
   const { error } = await query;
   if (error) throw error;
-  console.log(`[stripe-webhook] Subscription ${sub.id} → status=${sub.status}`);
+  console.log(`[stripe-webhook] Subscription ${sub.id} → status=${sub.status} schedule=${hasSchedule}`);
 }
 
 async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {

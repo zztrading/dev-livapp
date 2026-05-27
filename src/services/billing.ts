@@ -56,3 +56,44 @@ export function clearPendingPlan(): void {
     // ignore
   }
 }
+
+// ─── Plan change (upgrade / downgrade / cancel scheduled downgrade) ──────────
+
+export interface PlanChangeResult {
+  ok: boolean;
+  action?: 'upgraded' | 'downgrade_scheduled';
+  effective_at?: string;
+  message: string;
+}
+
+async function invokePlanChange(
+  action: 'upgrade' | 'downgrade' | 'cancel_downgrade',
+  planId?: PlanId | string,
+): Promise<PlanChangeResult> {
+  const body: Record<string, unknown> = { action };
+  if (planId) body.plan_id = planId;
+
+  const { data, error } = await supabase.functions.invoke<PlanChangeResult>(
+    'change-subscription-plan',
+    { body },
+  );
+
+  if (error) throw new Error(error.message || 'Plan change failed');
+  if (!data) throw new Error('Plan change returned no response');
+  return data;
+}
+
+/** Upgrade to a higher tier — applied immediately with prorated invoice. */
+export function upgradeSubscription(planId: PlanId | string): Promise<PlanChangeResult> {
+  return invokePlanChange('upgrade', planId);
+}
+
+/** Downgrade to a lower tier — applied at end of current billing period. */
+export function downgradeSubscription(planId: PlanId | string): Promise<PlanChangeResult> {
+  return invokePlanChange('downgrade', planId);
+}
+
+/** Cancel a previously scheduled downgrade — user stays on current plan. */
+export function cancelScheduledDowngrade(): Promise<PlanChangeResult> {
+  return invokePlanChange('cancel_downgrade');
+}
