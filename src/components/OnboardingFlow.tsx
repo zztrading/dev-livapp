@@ -44,6 +44,20 @@ export const OnboardingFlow = () => {
 
         setIsAuthenticated(true);
 
+        // Active subscription overrides everything — paying users skip onboarding.
+        // This catches users who signed up via Stripe (subscription exists) but whose
+        // `users.onboarding_completed` flag was never set (legacy data, edge case).
+        const { data: subData } = await supabase
+          .from('subscriptions')
+          .select('status')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (subData?.status === 'active' || subData?.status === 'trialing') {
+          navigate('/dashboard', { replace: true });
+          return;
+        }
+
         // Ensure users row exists
         const { data: userData, error: userError } = await supabase
           .from('users')
@@ -61,7 +75,7 @@ export const OnboardingFlow = () => {
               onboarding_completed: false,
             });
         } else if (userData?.onboarding_completed) {
-          navigate('/dashboard');
+          navigate('/dashboard', { replace: true });
           return;
         }
       } catch (error) {
