@@ -33,6 +33,7 @@ function lazyRetry<T extends React.ComponentType<any>>(
 // Lazy loaded pages - loaded on demand
 const Onboarding = lazyRetry(() => import("./pages/Onboarding"));
 const OnboardingFinish = lazyRetry(() => import("./pages/OnboardingFinish"));
+const AuthCallback = lazyRetry(() => import("./pages/AuthCallback"));
 const BillingSuccess = lazyRetry(() => import("./pages/BillingSuccess"));
 const BillingCancel = lazyRetry(() => import("./pages/BillingCancel"));
 const Pricing = lazyRetry(() => import("./pages/Pricing"));
@@ -182,6 +183,7 @@ const App = () => (
               <Routes>
                 <Route path="/" element={<Index />} />
                 <Route path="/auth" element={<Auth />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/quiz" element={<Quiz />} />
                 <Route path="/onboarding" element={<Onboarding />} />
                 <Route path="/onboarding/finish" element={<OnboardingFinish />} />
