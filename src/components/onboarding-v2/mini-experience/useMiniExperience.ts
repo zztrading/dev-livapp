@@ -1,26 +1,28 @@
 /**
- * useMiniExperience — state machine + scoring da Tela 10 do quiz.
+ * useMiniExperience — state machine + scoring da Tela 10 do Onboarding V2.
  *
- * Telas internas (7 sub-passos):
- *   1. filter      — escolha visual/escrita
- *   2. quiz_input   — quiz "erro de input" (fácil)
- *   3. quiz_persona — quiz "persona" (médio)
- *   4. quiz_context — quiz "engenharia de contexto" (hard)
- *   5. uau_one      — UAU 1 (imagem ou email rewrite, depende do filtro)
- *   6. uau_two      — UAU 2 (Prompt Builder SWOT universal)
- *   7. quiz_critique — quiz "critique loop" (hard)
+ * Sub-telas (10 sub-passos conforme spec-onboarding-completo-v2.md):
+ *   1/10. filter         — escolha visual/escrita                       +5
+ *   2/10. quiz_input     — quiz "erro de input" (fácil)        acerto: +15
+ *   3/10. quiz_persona   — quiz "persona" (médio)              acerto: +20
+ *   4/10. quiz_context   — quiz "engenharia de contexto" (hard) acerto: +25
+ *   5/10. uau_one        — UAU 1 (imagem ou email rewrite)             +10
+ *   6/10. uau_two_chips  — UAU 2 Chips V5 (Prompt Builder)             +15
+ *   7/10. uau_two_swot   — UAU 2 SWOT (reflexão pessoal)                +5
+ *   8/10. quiz_critique  — quiz "critique loop" (hard)         acerto: +10
+ *   9/10. mistake_review — retry erros (Caso A) ou skip (Caso B)        0 Domínio
+ *  10/10. antecipacao    — leitura emocional silenciosa                 0
  *
- * Pontuação Domínio IA:
- *   Tela 1: +5  (escolha pessoal)
- *   Tela 2: +10 acerto
- *   Tela 3: +15 acerto
- *   Tela 4: +20 acerto
- *   Tela 5: +15 (interativo, sempre)
- *   Tela 6: +20 (interativo, sempre)
- *   Tela 7: +15 acerto
- *   Total base: 100
- *   Combo bonus: +3 (2 seguidas) / +5 (3 seguidas, cumulativo +8) /
- *                +10 (4 seguidas, cumulativo +18) → cap 130
+ *   Total base: 5+15+20+25+10+15+5+10 = 105  (cap em 100)
+ *
+ *   Combo bonus quizzes (T2+T3+T4+T7):
+ *     +3  (2 seguidas)
+ *     +5  (3 seguidas, cumulativo +8)
+ *     +10 (4 seguidas, cumulativo +18)
+ *   Cap final aplicado: 100 (combo é absorvido)
+ *
+ *   Hearts: cada quiz errado tira 1 ❤️ (cap 4 erros, sempre ≥1 ❤️ no Desafio).
+ *   Mistake Review recupera Hearts e dá Sparks (Caso A: 5⚡, Caso B: 10⚡).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -31,8 +33,11 @@ export type SubStep =
   | "quiz_persona"
   | "quiz_context"
   | "uau_one"
-  | "uau_two"
-  | "quiz_critique";
+  | "uau_two_chips"
+  | "uau_two_swot"
+  | "quiz_critique"
+  | "mistake_review"
+  | "antecipacao";
 
 const SUBSTEPS: SubStep[] = [
   "filter",
@@ -40,8 +45,11 @@ const SUBSTEPS: SubStep[] = [
   "quiz_persona",
   "quiz_context",
   "uau_one",
-  "uau_two",
+  "uau_two_chips",
+  "uau_two_swot",
   "quiz_critique",
+  "mistake_review",
+  "antecipacao",
 ];
 
 const isValidSubStep = (value: string | null | undefined): value is SubStep =>
@@ -49,12 +57,12 @@ const isValidSubStep = (value: string | null | undefined): value is SubStep =>
 
 export type FilterInterest = "visual" | "writing";
 
+// Spec v2: 4 levels (drop 'perfeito')
 export type DominioLevel =
   | "iniciante"
   | "curioso"
   | "intermediario"
-  | "avancado"
-  | "perfeito";
+  | "avancado";
 
 export interface QuizResult {
   answer: string;
@@ -63,12 +71,13 @@ export interface QuizResult {
 
 const POINTS = {
   filter: 5,
-  quiz_input_correct: 10,
-  quiz_persona_correct: 15,
-  quiz_context_correct: 20,
-  uau_one: 15,
-  uau_two: 20,
-  quiz_critique_correct: 15,
+  quiz_input_correct: 15,
+  quiz_persona_correct: 20,
+  quiz_context_correct: 25,
+  uau_one: 10,
+  uau_two_chips: 15,
+  uau_two_swot: 5,
+  quiz_critique_correct: 10,
 } as const;
 
 const COMBO_BONUS = {
@@ -77,6 +86,10 @@ const COMBO_BONUS = {
   4: 10, // cumulativo: total +18 (4 seguidas)
 } as const;
 
+// Spec v2: cap real do Domínio IA é 100 (combo absorvido pelo cap)
+const SCORE_CAP = 100;
+const MAX_HEARTS = 5;
+
 interface State {
   subStep: SubStep;
   filterInterest: FilterInterest | null;
@@ -84,10 +97,18 @@ interface State {
   uau1Style: string | null;
   uau1Theme: string | null;
   uau1Writing: string | null;
+  // Chips V5: roda só em memória (decisão de produto — não persiste no banco)
+  uau2ChipsCompleted: boolean;
+  // SWOT continua persistindo (cols mantidas)
   uau2Moment: string | null;
   uau2Challenge: string | null;
   uau2Goal: string | null;
   uau2PromptBuilt: string | null;
+  // Mistake Review (analytics persistidos)
+  mistakeReviewAttempted: boolean;
+  mistakeReviewRecovered: number;
+  mistakeReviewSparks: number;
+  // Pontuação
   score: number;
   comboStreak: number;
   comboBonus: number;
@@ -100,14 +121,23 @@ const INITIAL_STATE: State = {
   uau1Style: null,
   uau1Theme: null,
   uau1Writing: null,
+  uau2ChipsCompleted: false,
   uau2Moment: null,
   uau2Challenge: null,
   uau2Goal: null,
   uau2PromptBuilt: null,
+  mistakeReviewAttempted: false,
+  mistakeReviewRecovered: 0,
+  mistakeReviewSparks: 0,
   score: 0,
   comboStreak: 0,
   comboBonus: 0,
 };
+
+export interface QuizMistake {
+  key: "input" | "persona" | "context" | "critique";
+  answer: string;
+}
 
 export interface MiniExperienceApi {
   ready: boolean;
@@ -119,6 +149,15 @@ export interface MiniExperienceApi {
   filterInterest: FilterInterest | null;
   lastPointsGained: number | null;
   lastComboBonus: number | null;
+  // Hearts derivado: 5 - quizzes errados + mistake recovered
+  heartsCurrent: number;
+  heartsLostInDesafio: number;
+  // Timestamps pra animar shake/fade no HeartsBar
+  heartsLastLostAt: number | null;
+  heartsLastGainedAt: number | null;
+  // Mistake Review
+  mistakes: QuizMistake[]; // perguntas erradas que vão pra retry
+  mistakeReviewSparks: number;
   setFilterInterest: (value: FilterInterest) => Promise<void>;
   submitQuiz: (
     quizKey: "input" | "persona" | "context" | "critique",
@@ -126,22 +165,32 @@ export interface MiniExperienceApi {
     correct: boolean,
   ) => Promise<void>;
   saveUauOne: (data: { style?: string; theme?: string; writing?: string }) => Promise<void>;
-  saveUauTwo: (data: {
+  saveUauTwoChips: () => Promise<void>;
+  saveUauTwoSwot: (data: {
     moment: string;
     challenge: string;
     goal: string;
     promptBuilt: string;
+  }) => Promise<void>;
+  saveMistakeReview: (data: {
+    attempted: boolean;
+    recovered: number;
+    sparks: number;
   }) => Promise<void>;
   next: () => void;
   complete: () => Promise<{ score: number; level: DominioLevel }>;
 }
 
 function levelFromScore(score: number): DominioLevel {
-  if (score >= 100) return "perfeito";
-  if (score >= 95) return "avancado";
-  if (score >= 80) return "intermediario";
-  if (score >= 60) return "curioso";
+  // Spec v2 linhas 643-648: faixas 30-49 / 50-69 / 70-89 / 90-100
+  if (score >= 90) return "avancado";
+  if (score >= 70) return "intermediario";
+  if (score >= 50) return "curioso";
   return "iniciante";
+}
+
+function capScore(score: number): number {
+  return Math.min(score, SCORE_CAP);
 }
 
 export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
@@ -149,6 +198,9 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
   const [ready, setReady] = useState(false);
   const [lastPointsGained, setLastPointsGained] = useState<number | null>(null);
   const [lastComboBonus, setLastComboBonus] = useState<number | null>(null);
+  // Timestamps pra disparar animações shake (perda) / fade-in (recovery) no HeartsBar
+  const [heartsLastLostAt, setHeartsLastLostAt] = useState<number | null>(null);
+  const [heartsLastGainedAt, setHeartsLastGainedAt] = useState<number | null>(null);
 
   // Promise singleton do INSERT inicial — anti-TOCTOU
   const ensurePromiseRef = useRef<Promise<unknown> | null>(null);
@@ -191,8 +243,16 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
         if (data.quiz_t3_correct === true) score += POINTS.quiz_persona_correct;
         if (data.quiz_t4_correct === true) score += POINTS.quiz_context_correct;
         if (data.uau1_style || data.uau1_writing) score += POINTS.uau_one;
-        if (data.uau2_prompt_built) score += POINTS.uau_two;
+        // Chips V5: não persiste, mas se chegou em uau_two_swot ou além, conta como feito
+        const chipsDone = data.current_substep
+          ? SUBSTEPS.indexOf(data.current_substep as SubStep) > SUBSTEPS.indexOf("uau_two_chips")
+          : false;
+        if (chipsDone) score += POINTS.uau_two_chips;
+        if (data.uau2_prompt_built) score += POINTS.uau_two_swot;
         if (data.quiz_t7_correct === true) score += POINTS.quiz_critique_correct;
+
+        // Cap defensivo na hidratação
+        score = capScore(score);
 
         // Recalcula streak na ordem dos quizzes
         const sequence: (boolean | null)[] = [
@@ -232,10 +292,14 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
           uau1Style: data.uau1_style ?? null,
           uau1Theme: data.uau1_theme ?? null,
           uau1Writing: data.uau1_writing ?? null,
+          uau2ChipsCompleted: chipsDone,
           uau2Moment: data.uau2_moment ?? null,
           uau2Challenge: data.uau2_challenge ?? null,
           uau2Goal: data.uau2_goal ?? null,
           uau2PromptBuilt: data.uau2_prompt_built ?? null,
+          mistakeReviewAttempted: data.mistake_review_attempted ?? false,
+          mistakeReviewRecovered: data.mistake_review_recovered ?? 0,
+          mistakeReviewSparks: data.mistake_review_sparks ?? 0,
           score,
           comboStreak: streak,
           comboBonus: data.combo_bonus_accumulated ?? 0,
@@ -294,7 +358,7 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
         return {
           ...prev,
           filterInterest: value,
-          score: already ? prev.score : prev.score + POINTS.filter,
+          score: capScore(already ? prev.score : prev.score + POINTS.filter),
         };
       });
       setLastPointsGained(earnedPoints > 0 ? earnedPoints : null);
@@ -339,12 +403,14 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
           quizResults: { ...prev.quizResults, [quizKey]: { answer, correct } },
           comboStreak: newStreak,
           comboBonus: prev.comboBonus + earnedBonus,
-          score: prev.score + earnedBase + earnedBonus,
+          score: capScore(prev.score + earnedBase + earnedBonus),
         };
       });
 
       setLastPointsGained(correct ? pointsMap[quizKey] : 0);
       setLastComboBonus(earnedBonus > 0 ? earnedBonus : null);
+      // Dispara animação shake na HeartsBar quando perde vida
+      if (!correct) setHeartsLastLostAt(Date.now());
 
       await persistPartial({
         [dbColMap[quizKey].answer]: answer,
@@ -365,7 +431,7 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
           uau1Style: data.style ?? prev.uau1Style,
           uau1Theme: data.theme ?? prev.uau1Theme,
           uau1Writing: data.writing ?? prev.uau1Writing,
-          score: already ? prev.score : prev.score + POINTS.uau_one,
+          score: capScore(already ? prev.score : prev.score + POINTS.uau_one),
         };
       });
       setLastPointsGained(earned > 0 ? earned : null);
@@ -378,7 +444,23 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
     [persistPartial],
   );
 
-  const saveUauTwo = useCallback(
+  // Chips V5 — NÃO persiste no banco (decisão de produto).
+  // Só marca em memória que completou + soma pontos.
+  const saveUauTwoChips = useCallback(async () => {
+    let earned = 0;
+    setState((prev) => {
+      const already = prev.uau2ChipsCompleted;
+      if (!already) earned = POINTS.uau_two_chips;
+      return {
+        ...prev,
+        uau2ChipsCompleted: true,
+        score: capScore(already ? prev.score : prev.score + POINTS.uau_two_chips),
+      };
+    });
+    setLastPointsGained(earned > 0 ? earned : null);
+  }, []);
+
+  const saveUauTwoSwot = useCallback(
     async (data: {
       moment: string;
       challenge: string;
@@ -388,14 +470,14 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
       let earned = 0;
       setState((prev) => {
         const already = !!prev.uau2PromptBuilt;
-        if (!already) earned = POINTS.uau_two;
+        if (!already) earned = POINTS.uau_two_swot;
         return {
           ...prev,
           uau2Moment: data.moment,
           uau2Challenge: data.challenge,
           uau2Goal: data.goal,
           uau2PromptBuilt: data.promptBuilt,
-          score: already ? prev.score : prev.score + POINTS.uau_two,
+          score: capScore(already ? prev.score : prev.score + POINTS.uau_two_swot),
         };
       });
       setLastPointsGained(earned > 0 ? earned : null);
@@ -407,6 +489,29 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
       });
     },
     [persistPartial],
+  );
+
+  const saveMistakeReview = useCallback(
+    async (data: { attempted: boolean; recovered: number; sparks: number }) => {
+      setState((prev) => ({
+        ...prev,
+        mistakeReviewAttempted: data.attempted,
+        mistakeReviewRecovered: data.recovered,
+        mistakeReviewSparks: data.sparks,
+      }));
+      // Dispara animação fade-in na HeartsBar quando recupera vida(s)
+      if (data.recovered > 0) setHeartsLastGainedAt(Date.now());
+      await persistPartial({
+        mistake_review_attempted: data.attempted,
+        mistake_review_recovered: data.recovered,
+        mistake_review_sparks: data.sparks,
+        hearts_lost_in_desafio: Math.min(
+          4,
+          Object.values(state.quizResults).filter((r) => r?.correct === false).length,
+        ),
+      });
+    },
+    [persistPartial, state.quizResults],
   );
 
   // Avança sub-step. Side-effect (persist) está em useEffect separado.
@@ -424,7 +529,7 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
   const completedRef = useRef<{ score: number; level: DominioLevel } | null>(null);
   const complete = useCallback(async (): Promise<{ score: number; level: DominioLevel }> => {
     if (completedRef.current) return completedRef.current;
-    const finalScore = Math.min(state.score, 130);
+    const finalScore = capScore(state.score);
     const level = levelFromScore(finalScore);
     completedRef.current = { score: finalScore, level };
     await persistPartial({
@@ -434,6 +539,28 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
     });
     return { score: finalScore, level };
   }, [state.score, persistPartial]);
+
+  // ============================================================
+  // Derivados
+  // ============================================================
+
+  const errors = Object.values(state.quizResults).filter(
+    (r) => r?.correct === false,
+  ).length;
+  const heartsLostInDesafio = Math.min(4, errors);
+  const heartsCurrent = Math.max(
+    0,
+    Math.min(MAX_HEARTS, MAX_HEARTS - heartsLostInDesafio + state.mistakeReviewRecovered),
+  );
+
+  // Lista de erros pra Mistake Review (perguntas que errou na ordem)
+  const mistakes: QuizMistake[] = [];
+  (["input", "persona", "context", "critique"] as const).forEach((key) => {
+    const r = state.quizResults[key];
+    if (r && r.correct === false) {
+      mistakes.push({ key, answer: r.answer });
+    }
+  });
 
   return {
     ready,
@@ -445,10 +572,18 @@ export function useMiniExperience(sessionId: string | null): MiniExperienceApi {
     filterInterest: state.filterInterest,
     lastPointsGained,
     lastComboBonus,
+    heartsCurrent,
+    heartsLostInDesafio,
+    heartsLastLostAt,
+    heartsLastGainedAt,
+    mistakes,
+    mistakeReviewSparks: state.mistakeReviewSparks,
     setFilterInterest,
     submitQuiz,
     saveUauOne,
-    saveUauTwo,
+    saveUauTwoChips,
+    saveUauTwoSwot,
+    saveMistakeReview,
     next,
     complete,
   };

@@ -1,7 +1,6 @@
 import { ReactNode, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
-import { LivCornerAvatar } from "./LivCornerAvatar";
 
 interface QuestionLayoutProps {
   question: string;
@@ -12,7 +11,7 @@ interface QuestionLayoutProps {
 
 /**
  * Layout comum das telas de pergunta (Tela 3 em diante).
- * - Header com botão Voltar + LIV pequena no canto + progress (que já vem do Flow)
+ * - Header com botão Voltar + progress (que já vem do Flow)
  * - Pergunta em destaque
  * - Subtítulo opcional
  * - Conteúdo (opções) abaixo
@@ -36,8 +35,8 @@ export const QuestionLayout = ({
       transition={{ duration: 0.35, ease: [0.25, 0.1, 0.25, 1] }}
       className="min-h-screen flex flex-col px-5 sm:px-6 pt-6 pb-10"
     >
-      {/* Header: voltar + LIV avatar */}
-      <div className="flex items-center justify-between mb-8 max-w-md w-full mx-auto">
+      {/* Header: voltar */}
+      <div className="flex items-center mb-8 max-w-md w-full mx-auto">
         {onBack ? (
           <button
             type="button"
@@ -50,7 +49,6 @@ export const QuestionLayout = ({
         ) : (
           <span className="w-9" aria-hidden="true" />
         )}
-        <LivCornerAvatar />
       </div>
 
       {/* Pergunta */}

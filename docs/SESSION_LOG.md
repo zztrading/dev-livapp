@@ -254,3 +254,291 @@ PR #296 era de commit pré-existente; #297 e #298 foram trabalho desta sessão.
 3. **Atacar pendência 4.2** — ajustar workflow do `Guard: every TTS function uses buildCacheKey` para rodar sempre, depois voltar à lista de Required.
 4. **Onboarding-ideas.md** — definir se vira projeto/feature concreta com sprint dedicado. Hoje é só plano em documento.
 5. **Sprint M6 itens 1, 2, 3 (e demais sprints)** — preciso do checklist completo, esta sessão só executou o item #4.
+
+---
+
+# Sessão 2026-05-26 — Contrato de Cooperação + Template de Auditoria
+
+> **Sessão:** Claude Code
+> **Branch:** `claude/jolly-fermi-0kbE9`
+> **Período:** 2026-05-26
+> **Autor humano:** myfcan (fcanuto@gmail.com)
+
+## 9. Atualização do `CLAUDE.md` — Contrato de Cooperação e regras novas
+
+### Bloco 1 — Contrato de Cooperação (7 regras inegociáveis)
+
+Adicionado no topo do `CLAUDE.md`, antes do "Fluxo obrigatório":
+
+1. Sem invenção e sem suposição
+2. Sem mentira e sem omissão
+3. Análise completa antes de responder/executar
+4. Nunca executar sem autorização explícita
+5. Precisão técnica e certeza absoluta
+6. Idioma PT-BR por padrão
+7. Evitar timeout — fases pequenas
+
+### Bloco 2 — Duas regras novas na seção `## Regras`
+
+- **Migrations precisam de evidência de aplicação no remote** — lição direta da Onboarding V2, onde front buildou mas migrations nunca foram aplicadas
+- **Branch long-lived (5+ PRs sem merge em main)** precisa de plano explícito de merge
+
+### Validação
+
+- ✅ `npx tsc --noEmit` → 0 erros
+- Commit `03915f7` no branch `claude/jolly-fermi-0kbE9`
+- Push concluído (branch criada no remote nesse push)
+
+## 10. Criação de `docs/AUDIT_TEMPLATE.md`
+
+Template formal de auditoria, 138 linhas, 4 seções:
+
+1. **Quando rodar** — fim de sprint, antes de prod, branch long-lived
+2. **Checklist técnico** — schema vs front, RLS, FK, storage, edge functions, e o bloco de **7 queries SQL** para evidência de migration aplicada
+3. **Formato do relatório** — severidade 🔴/🟡/🟢, arquivo:linha, fix proposto, estimativa
+4. **Lições da Onboarding V2** — caso real onde 13 PRs mergearam, código frontend foi auditado, e mesmo assim a feature ficou quebrada porque migrations nunca foram aplicadas no Supabase
+
+### Validação
+
+- ✅ `npx tsc --noEmit` → 0 erros
+- Commit `1b6c8da` no branch `claude/jolly-fermi-0kbE9`
+- Push concluído
+
+## 11. Atualização deste `SESSION_LOG.md`
+
+Append das seções 9, 10 e 11.
+
+## 12. PRs desta sessão
+
+Nenhum PR aberto. Branch `claude/jolly-fermi-0kbE9` ficou com 3 commits (Contrato + AUDIT_TEMPLATE + este log). Decisão de PR pra `main` fica com o usuário.
+
+## 13. Lacunas reconhecidas
+
+- **Histórico Onboarding V2 (2026-05-19 → 2026-05-25)** — 18+ PRs e discovery do problema Lovable / migrations não estão neste log. Coleta futura pode ser feita via GitHub API/MCP em sessão dedicada.
+- Esta sessão NÃO mexeu em código de produção, migrations ou Edge Functions — só documentação.
+
+---
+
+# Sessão 2026-05-27 — Onboarding V2 FASE 0 + FASE 1 (PRs #333 e #334)
+
+> **Sessão:** Claude Code (sessão de produção)
+> **Branch:** `claude/jolly-fermi-0kbE9` (reutilizado da sessão anterior)
+> **Período:** noite/madrugada de 2026-05-27
+> **Autor humano:** myfcan (fcanuto@gmail.com)
+
+## 14. PR #333 — FASE 0 (base schema + edge functions + componentes)
+
+### Conteúdo
+- 2 migrations: `users` ganha 9 colunas onboarding v2 (hook_answer, attribution_source, learning_objective, ai_usage_level, daily_goal_xp, path_choice, notif_permission, hearts_current, hearts_last_lost_at); `onboarding_v2_sessions` ganha 8 cols (wizard + deferred token); `onboarding_v2_mini_experience` ganha 4 cols (Mistake Review)
+- 2 edge functions: `set-deferred-token` (cookie HttpOnly 7d) + `redeem-deferred-token`
+- Componentes base: `HeartsBar`, `LivVideo`, `lib/onboardingV2Deferred.ts`
+- Refactor `useOnboardingV2`: cookie 30d→7d, STEP_ORDER 12 telas reordenado (add `hook` e `choose_path`, remove `prompt_knowledge`)
+- Refactor `OnboardingV2Flow`: placeholders pras Telas 4 (Hook) e 9 (Choose Path)
+- Delete `PromptKnowledgeScreen.tsx` (resíduo V1)
+
+### Merge commit
+`ba93da4a` em `main`.
+
+### 🚨 Problema descoberto pós-merge
+
+Auditoria do usuário detectou que **migrations não tinham sido aplicadas no Supabase remote** — código em produção referenciava 13 colunas inexistentes. Sintoma típico do problema documentado no AUDIT_TEMPLATE da sessão 2026-05-26.
+
+Causa raiz: `supabase/config.toml` não tinha registro das 2 edge functions novas → deploy automático do Lovable ignorou silenciosamente. **Falha real do PR #333.** Eu deveria ter incluído o registro no mesmo commit. Lição adicionada ao changelog mental.
+
+### Correções pós-merge (feitas pelo Lovable + user)
+
+| Item | Resolução |
+|---|---|
+| Migrations não aplicadas | User aplicou via SQL editor — 4 blocos (pre-check + 2 migrations + registro em schema_migrations) |
+| Edge functions não deployadas | User adicionou blocos `[functions.<slug>]` no `config.toml`, Lovable deployou |
+| `types.ts` desatualizado | Lovable regenerou (3.113 linhas, 57 ocorrências das 15 cols novas) |
+
+### Validação final pós-correções
+- ✅ Migrations aplicadas + registradas em `schema_migrations`
+- ✅ Edge functions ativas (respondem com 400/200 esperados; eu não consegui validar HTTP direto por causa de network policy do ambiente remoto)
+- ✅ `npx tsc --noEmit` → 0 erros
+
+---
+
+## 15. Auditoria robusta — Onboarding V2 vs spec
+
+Após PR #333, rodada auditoria estruturada via subagent Explore comparando estado do código (pós-pull do main) contra `docs/spec-onboarding-completo-v2.md` (1265 linhas, agora canônico no repo).
+
+### Score final FASE 0
+- Componentes: 6/8 (75%)
+- Telas Wizard: 7/9 (78%)
+- Sub-telas Desafio: 5/9 (44%) + 2 sub-telas críticas faltando
+- Colunas schema: 9/13 (69%) — faltavam `sparks_balance`, `xp_total`, `patente_level`, integração de `streak_days`
+- Migrations: 5/6+ (83%)
+
+**Conclusão:** PR #333 entregou ~70% da FASE 0. Bloqueadores críticos identificados:
+1. UAU 2 implementado como SWOT (spec exige Chips V5)
+2. 4 cols faltando em `users`
+3. Tela 4 Hook + Tela 9 Choose Path eram placeholders
+4. Sub-telas 8 Mistake Review + 9 Antecipação não existem
+5. `DominioBar` sem 4 estados visuais por faixa
+6. `HeartsBar` não está no header do Desafio
+
+### Decisão de escopo sobre SWOT (mudança do spec original)
+
+Spec proibia SWOT (item changelog crítico). Usuário decidiu **manter SWOT como sub-tela 7 separada** (não como substituto da UAU 2):
+- SWOT renumera Desafio pra 10 sub-telas
+- SWOT vale +5 Domínio (total = 105, cap em 100 absorve)
+- Mantém nome "SWOT" no UI
+- Migration M0.2b: NÃO dropa cols SWOT, só adiciona Chips V5 cols
+
+---
+
+## 16. PR #334 — PR 2 / FASE 1 (6 PBIs)
+
+### Plano sprint
+Antes de codar, montado plano detalhado com 6 PBIs, critérios de aceite, plano de teste, estados de erro, e auditoria robusta pré-implementação que identificou 12 problemas (3 críticos, 6 médios, 3 baixos). Usuário aprovou as 4 decisões críticas antes de codar.
+
+### PBIs implementadas
+
+| PBI | Conteúdo | Commit |
+|---|---|---|
+| 1 | Migration: `sparks_balance`, `xp_total`, `patente_level` em `users` | `67ebb3f5` |
+| 2 | `HookScreen.tsx` (Tela 4) com feedback condicional inline + CONTINUAR | `fe2b02f8` |
+| 3 | `ChoosePathScreen.tsx` (Tela 9) | `fe2b02f8` |
+| 5 | Progress bar refactor — cálculo linear → mapa explícito por step (10/22/33/45/56/67/78/89/95/100) | `fe2b02f8` |
+| 6 | Error handling em `saveAnswer` — retorna boolean + toast em fail + bloqueio avanço | `fe2b02f8` |
+| 4a | Copy fixes triviais (≤5 palavras) em AttributionScreen/MotivationScreen/AiLevelScreen/DailyGoalScreen | `5ce832cd` |
+| 4b | Copy fixes grandes (aprovados antes de comitar) em LivIntroScreen/AiLevelScreen/PromiseScreen | `b163f0f7` |
+
+### Merge commit
+PR #334 mergeado em `main`. 11 arquivos alterados, tsc 0 erros, CI verde.
+
+### Status dos 12 problemas da auditoria pré-PR 2
+- 9 corrigidos no PR 2 (#1, #2, #3, #4, #5 mitigado, #6, #7, #8, #12)
+- 3 anotados pra PRs futuros:
+  - #9 `miniResult` perdido em refresh → **PR 4**
+  - #10 Hybrid key-value em `onboarding_v2_answers` → cleanup futuro (BL.2)
+  - #11 Tela 1 Landing inexistente → **PR 5**
+
+---
+
+## 17. Estratégia de PRs decompostos
+
+Em vez de 1 PR gigante, decidido decompor o resto do onboarding em PRs pequenos e revisáveis:
+
+| PR | Escopo | Status |
+|---|---|---|
+| #333 | FASE 0 — base schema + edge functions + componentes | ✅ Merged |
+| #334 | FASE 1 — Hook + ChoosePath + copy audit + schema fix | ✅ Merged |
+| PR 3 | FASE 2 — Desafio completo (10 sub-telas, M0.2b, Chips V5, SWOT realocado, Mistake Review, Antecipação, DominioBar 4 cores, HeartsBar no header) | ⏳ Próximo |
+| PR 4 | FASE 3 — Reveal + Signup completos (4 cols novas, msg condicional, form, edge functions integradas) | ⏳ |
+| PR 5 | FASE 4 — Polish (Tela 1 Landing, Hearts regen 3h, sons, animações, smoke tests) | ⏳ |
+
+---
+
+## 18. PRs desta sessão
+
+| # | Título | Merge commit |
+|---|---|---|
+| #333 | FASE 0 — base schema + edge functions + components + refactor de fluxo | `ba93da4a` |
+| #334 | PR 2 — Hook + ChoosePath + copy audit + schema fix | (a confirmar — apenas listado pelo webhook) |
+
+---
+
+## 19. Lições aprendidas desta sessão
+
+1. **Migration sem evidência de aplicação no remote = feature inacabada** — regra do CLAUDE.md confirmada no campo. PR #333 mostrou que tsc verde + merge não é suficiente.
+2. **Edge functions exigem registro em `supabase/config.toml`** — deploy automático ignora silenciosamente se faltar. Adicionar como checklist obrigatório no plano de PRs com edge function.
+3. **Spec colado pelo usuário pode estar desatualizado** — sempre validar contra arquivo canônico no repo (`docs/spec-onboarding-completo-v2.md`).
+4. **Auditoria pré-implementação economiza tempo** — auditoria de 12 problemas antes do PR 2 levou ~10 min mas evitou retrabalho de horas.
+5. **Decompor em PRs pequenos > 1 PR gigante** — cada PR fica revisável, Lovable consegue aplicar sem stress, decisões ficam isoladas.
+6. **MCP Supabase desta sessão aponta pra projeto errado** (AgentStar, não intel-ignite-pro). Apenas o user consegue aplicar migrations e verificar estado real. Documentar essa limitação no início das próximas sessões pra evitar tentar usar MCP em vão.
+
+---
+
+## 20. Pendências pra próxima sessão
+
+1. **PR 3 — FASE 2 Desafio completo** (próximo passo principal)
+2. Anotados pós-auditoria PR 2:
+   - PR 4 deve resolver bug existente: `miniResult` perdido em refresh entre `mini_experience` e `reveal`
+   - PR 4 RevealScreen vai ter mensagem condicional por path_choice + 4 faixas de Domínio
+   - Cleanup futuro: dropar `onboarding_v2_answers` (BL.2) após audit dos consumidores
+   - Cleanup futuro: rename `patent_level` → `patente_level` após audit dos consumidores
+3. **Hearts regen 3h** — só campo existe, lógica zero. Provavelmente Edge Function ou pg_cron. Decidir no PR 5.
+
+---
+
+# Sessão 2026-05-28 — Onboarding V2 FASE 3 + 4 + cleanup (PRs #337-#342)
+
+> **Sessão:** Claude Code (continuação)
+> **Branch:** `claude/jolly-fermi-0kbE9` (long-lived, agora com 6 PRs em sequência)
+> **Período:** dia inteiro 2026-05-28
+> **Autor humano:** myfcan (fcanuto@gmail.com)
+
+## 21. Fechamento do Onboarding V2 — 6 PRs nesta sessão
+
+| # | Conteúdo | Highlight |
+|---|---|---|
+| #337 | FASE 3 — Reveal + Signup + Redemption | RevealScreen com 4 faixas, msg condicional por path_choice, SignupDeferredScreen com form inline + Google OAuth, setDeferredToken cookie 7d, RPC link populate users.* |
+| #338 | Hotfix auditoria forense (5 bugs) | AiLevelScreen com values SQL errados (none/beginner/etc vs CHECK), signup com RPC fail silencioso, Profile.tsx legacy notifications_enabled, sessionStorage não limpo, NotificationPrimer copy |
+| #339 | PR 5a — Hearts regen 3h + audit Desafio + a11y | pg_cron job a cada hora, FilterInterestScreen com "1 de 7" hardcoded (era 10) |
+| #340 | BL.1 — drop `notifications_enabled` BOOL | Cleanup pós-soak conforme planejado em PR #333 |
+| #341 | BL.2 — drop `onboarding_v2_answers` key-value | Remove hybrid write em useOnboardingV2, single source of truth = sessions cols dedicadas |
+| #342 | PR 5b3 — fix RPC link + drop `patente_level` órfã | Correção forense de incidente crítico (detalhado em seção 23) |
+
+## 22. Estratégia de auditoria que funcionou
+
+Padrão aplicado em todos os PRs de cleanup (BL.1, BL.2, PR 5b3):
+
+1. **Grep paralelo** das referências em src/, supabase/migrations/, supabase/functions/, docs/
+2. **4 queries SQL** pra validar estado real do banco — RPCs/views/triggers, indexes, constraints, contagens
+3. **Refactor primeiro, drop depois** — ordem importa: se dropar antes do refactor, código escreve em coluna inexistente
+4. **Migration transacional** com `BEGIN/COMMIT` e asserts inline (`RAISE EXCEPTION`)
+5. **POST-CHECK** com queries que asseguram estado esperado
+
+Padrão evitou bugs em todos os 6 PRs.
+
+## 23. Incidente crítico — RPC `link_onboarding_v2_to_user` regrediu silenciosamente
+
+Documentação completa: `docs/incidents/2026-05-28-rpc-link-onboarding-v2-sumiu.md`.
+
+**Resumo:**
+- PR #337 aplicou migration `20260528140000` que substituiu RPC pra popular `users.*` com gamification do onboarding.
+- POST-CHECK confirmou aplicação na sessão (`rpc_atualizado=true, mig_registrada=1`).
+- Auditoria pré-PR 5b3 (rename `patent_level`) descobriu: body do RPC voltou pra versão antiga + row sumiu do `schema_migrations`.
+- Lovable confirmou explicitamente não ter alterado. Causa raiz não identificada.
+- **Impacto real: zero alunos afetados.** PRE-CHECK do PR 5b3 mostrou `onboarding_v2_sessions.user_id IS NOT NULL` retornando 0 rows — bug pego antes do primeiro fluxo real.
+- Correção: migration `20260528180000` transacional com 4 passos + asserts inline com `RAISE EXCEPTION`.
+
+**Lições:**
+- POST-CHECK ✅ não significa estado estável a longo prazo — pode regredir silenciosamente.
+- Auditoria forense pré-merge vale mais que confiar no estado da última sessão.
+- Asserts inline em migrations transacionais > confiar em POST-CHECK rodado em momento isolado.
+- Spec PT-BR em projeto EN-tech: nomeação canônica deve seguir código existente (`patent_level` no app inteiro), não spec novo (`patente_level`).
+
+## 24. Estado final do Onboarding V2
+
+| Componente | Estado |
+|---|---|
+| Schema | ✅ Limpo (BL.1, BL.2, D5 fechados) |
+| 13 telas do wizard + Reveal + Signup | ✅ Todas implementadas conforme spec v2 |
+| 10 sub-telas do Desafio | ✅ Inclusive Chips V5, SWOT, Mistake Review, Antecipação |
+| RPC `link_onboarding_v2_to_user` | ✅ Popula `users.*` com gamification + tem asserts inline |
+| Hearts regen 3h | ✅ pg_cron job a cada hora |
+| Deferred token (cookie 7d) | ✅ Edge Functions set/redeem ativas |
+| Profile.tsx | ✅ Usa `notif_permission` canônico (BL.1 fechado) |
+| Source of truth respostas | ✅ `onboarding_v2_sessions` cols dedicadas (BL.2 fechou hybrid) |
+| `patente_level` órfã | ✅ Dropada |
+
+## 25. Pendências opcionais (PR 5c, se quiser)
+
+Não-bloqueantes pra fechamento:
+
+- Banner de recovery na home pra quem voltou em <7d com cookie deferred (redemption silenciosa já funciona via `useOnboardingV2`)
+- Sons (FASE 4 do spec)
+- E2E smoke tests (requer setup de framework Playwright/Cypress)
+- Smoke test no CI verificando body do RPC remoto (inviável sem credenciais Supabase no CI)
+
+## 26. Aprendizados de processo
+
+1. **Decompor em PRs pequenos > 1 PR gigante.** Sequência de 10 PRs (#333-342) cada um isolado e revisável. Cada um aplicou migration, validou, mergeou. Se algum desse problema, o blast radius era limitado.
+2. **Auditoria pré-implementação economiza tempo.** Cada PR de cleanup começou com grep paralelo + 4 queries SQL. Levou ~5 min por PR e evitou retrabalho de horas.
+3. **Spec ≠ código.** Spec V2 usou PT-BR (`patente_level`); código sempre EN-tech (`patent_level`). Quando há conflito, código real é a fonte. Spec errado se corrige (ou se ignora a parte específica).
+4. **Migrations sumindo silenciosamente é possível.** Não confiar em POST-CHECK isolado pra dados de longo prazo. Asserts inline em migrations transacionais são a única defesa robusta.
+5. **Lovable + Claude trabalhando no mesmo repo precisa de processo.** Sincronização pode ter efeitos não-observáveis. Periodicidade de auditoria é a única defesa prática.

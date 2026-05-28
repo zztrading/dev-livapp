@@ -22,9 +22,10 @@ export const LivIntroScreen = ({ onContinue }: LivIntroScreenProps) => {
           className="relative rounded-2xl bg-white border border-indigo-200 shadow-md shadow-indigo-500/10 px-5 py-4"
         >
           <p className="text-base sm:text-lg text-slate-700 leading-relaxed">
-            Oi! Sou a <span className="font-bold text-indigo-600">LIV</span>. Vou te ajudar a dominar IA.
+            Oi! Sou a <span className="font-bold text-indigo-600">LIV</span>. Vou te ajudar a dominar
+            IA pra usar onde você quiser — trabalho, projetos, vida.
             <br />
-            <span className="text-slate-600">Vamos personalizar sua jornada?</span>
+            <span className="text-slate-600">Vamos começar?</span>
           </p>
           {/* Tail apontando pra baixo (em direção à Liv) */}
           <span

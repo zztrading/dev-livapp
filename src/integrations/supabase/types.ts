@@ -930,38 +930,6 @@ export type Database = {
           },
         ]
       }
-      onboarding_v2_answers: {
-        Row: {
-          answer_value: string
-          answered_at: string
-          id: number
-          question_id: string
-          session_id: string
-        }
-        Insert: {
-          answer_value: string
-          answered_at?: string
-          id?: never
-          question_id: string
-          session_id: string
-        }
-        Update: {
-          answer_value?: string
-          answered_at?: string
-          id?: never
-          question_id?: string
-          session_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "onboarding_v2_answers_session_id_fkey"
-            columns: ["session_id"]
-            isOneToOne: false
-            referencedRelation: "onboarding_v2_sessions"
-            referencedColumns: ["session_id"]
-          },
-        ]
-      }
       onboarding_v2_events: {
         Row: {
           created_at: string
@@ -1008,6 +976,10 @@ export type Database = {
           dominio_level: string | null
           dominio_score: number | null
           filter_interest: string | null
+          hearts_lost_in_desafio: number
+          mistake_review_attempted: boolean
+          mistake_review_recovered: number
+          mistake_review_sparks: number
           quiz_t2_answer: string | null
           quiz_t2_correct: boolean | null
           quiz_t3_answer: string | null
@@ -1033,6 +1005,10 @@ export type Database = {
           dominio_level?: string | null
           dominio_score?: number | null
           filter_interest?: string | null
+          hearts_lost_in_desafio?: number
+          mistake_review_attempted?: boolean
+          mistake_review_recovered?: number
+          mistake_review_sparks?: number
           quiz_t2_answer?: string | null
           quiz_t2_correct?: boolean | null
           quiz_t3_answer?: string | null
@@ -1058,6 +1034,10 @@ export type Database = {
           dominio_level?: string | null
           dominio_score?: number | null
           filter_interest?: string | null
+          hearts_lost_in_desafio?: number
+          mistake_review_attempted?: boolean
+          mistake_review_recovered?: number
+          mistake_review_sparks?: number
           quiz_t2_answer?: string | null
           quiz_t2_correct?: boolean | null
           quiz_t3_answer?: string | null
@@ -1088,10 +1068,18 @@ export type Database = {
       }
       onboarding_v2_sessions: {
         Row: {
+          ai_level: string | null
+          attribution: string | null
           completed_at: string | null
           daily_goal_xp: number | null
+          deferred_expires_at: string | null
+          deferred_session_token: string | null
+          hook_answer: string | null
           last_step: string | null
           linked_at: string | null
+          motivation: string | null
+          notif_permission: string | null
+          path_choice: string | null
           referrer: string | null
           session_id: string
           started_at: string
@@ -1105,10 +1093,18 @@ export type Database = {
           variant: string
         }
         Insert: {
+          ai_level?: string | null
+          attribution?: string | null
           completed_at?: string | null
           daily_goal_xp?: number | null
+          deferred_expires_at?: string | null
+          deferred_session_token?: string | null
+          hook_answer?: string | null
           last_step?: string | null
           linked_at?: string | null
+          motivation?: string | null
+          notif_permission?: string | null
+          path_choice?: string | null
           referrer?: string | null
           session_id: string
           started_at?: string
@@ -1122,10 +1118,18 @@ export type Database = {
           variant?: string
         }
         Update: {
+          ai_level?: string | null
+          attribution?: string | null
           completed_at?: string | null
           daily_goal_xp?: number | null
+          deferred_expires_at?: string | null
+          deferred_session_token?: string | null
+          hook_answer?: string | null
           last_step?: string | null
           linked_at?: string | null
+          motivation?: string | null
+          notif_permission?: string | null
+          path_choice?: string | null
           referrer?: string | null
           session_id?: string
           started_at?: string
@@ -1908,15 +1912,21 @@ export type Database = {
       users: {
         Row: {
           age: number | null
+          ai_usage_level: string | null
+          attribution_source: string | null
           avatar_url: string | null
           coins: number | null
           created_at: string | null
+          daily_goal_xp: number | null
           daily_interaction_limit: number | null
           daily_time: Database["public"]["Enums"]["daily_time_type"] | null
           dashboard_access_count: number
           dashboard_tour_seen_at: string | null
           email: string
           gamification_updated_at: string | null
+          hearts_current: number | null
+          hearts_last_lost_at: string | null
+          hook_answer: string | null
           id: string
           interactions_used_today: number | null
           is_active: boolean
@@ -1926,32 +1936,42 @@ export type Database = {
           learning_goal:
             | Database["public"]["Enums"]["learning_goal_type"]
             | null
+          learning_objective: string | null
           name: string
           notifications_enabled: boolean | null
           onboarding_completed: boolean | null
           onboarding_completed_at: string | null
           onboarding_started_at: string | null
           patent_level: number | null
+          path_choice: string | null
           phone: string | null
           plan: Database["public"]["Enums"]["plan_type"] | null
           power_score: number | null
           profession: string | null
+          sparks_balance: number
           streak_days: number | null
           total_lessons_completed: number | null
           total_points: number | null
           updated_at: string | null
+          xp_total: number
         }
         Insert: {
           age?: number | null
+          ai_usage_level?: string | null
+          attribution_source?: string | null
           avatar_url?: string | null
           coins?: number | null
           created_at?: string | null
+          daily_goal_xp?: number | null
           daily_interaction_limit?: number | null
           daily_time?: Database["public"]["Enums"]["daily_time_type"] | null
           dashboard_access_count?: number
           dashboard_tour_seen_at?: string | null
           email: string
           gamification_updated_at?: string | null
+          hearts_current?: number | null
+          hearts_last_lost_at?: string | null
+          hook_answer?: string | null
           id: string
           interactions_used_today?: number | null
           is_active?: boolean
@@ -1961,32 +1981,42 @@ export type Database = {
           learning_goal?:
             | Database["public"]["Enums"]["learning_goal_type"]
             | null
+          learning_objective?: string | null
           name: string
-          notifications_enabled?: boolean | null
+          notif_permission?: string | null
           onboarding_completed?: boolean | null
           onboarding_completed_at?: string | null
           onboarding_started_at?: string | null
           patent_level?: number | null
+          path_choice?: string | null
           phone?: string | null
           plan?: Database["public"]["Enums"]["plan_type"] | null
           power_score?: number | null
           profession?: string | null
+          sparks_balance?: number
           streak_days?: number | null
           total_lessons_completed?: number | null
           total_points?: number | null
           updated_at?: string | null
+          xp_total?: number
         }
         Update: {
           age?: number | null
+          ai_usage_level?: string | null
+          attribution_source?: string | null
           avatar_url?: string | null
           coins?: number | null
           created_at?: string | null
+          daily_goal_xp?: number | null
           daily_interaction_limit?: number | null
           daily_time?: Database["public"]["Enums"]["daily_time_type"] | null
           dashboard_access_count?: number
           dashboard_tour_seen_at?: string | null
           email?: string
           gamification_updated_at?: string | null
+          hearts_current?: number | null
+          hearts_last_lost_at?: string | null
+          hook_answer?: string | null
           id?: string
           interactions_used_today?: number | null
           is_active?: boolean
@@ -1996,20 +2026,24 @@ export type Database = {
           learning_goal?:
             | Database["public"]["Enums"]["learning_goal_type"]
             | null
+          learning_objective?: string | null
           name?: string
-          notifications_enabled?: boolean | null
+          notif_permission?: string | null
           onboarding_completed?: boolean | null
           onboarding_completed_at?: string | null
           onboarding_started_at?: string | null
           patent_level?: number | null
+          path_choice?: string | null
           phone?: string | null
           plan?: Database["public"]["Enums"]["plan_type"] | null
           power_score?: number | null
           profession?: string | null
+          sparks_balance?: number
           streak_days?: number | null
           total_lessons_completed?: number | null
           total_points?: number | null
           updated_at?: string | null
+          xp_total?: number
         }
         Relationships: []
       }
@@ -2862,6 +2896,7 @@ export type Database = {
         Returns: undefined
       }
       mark_dashboard_tour_seen: { Args: never; Returns: undefined }
+      regen_hearts_3h: { Args: never; Returns: undefined }
       register_dashboard_login: {
         Args: { p_last_sign_in_at: string }
         Returns: {

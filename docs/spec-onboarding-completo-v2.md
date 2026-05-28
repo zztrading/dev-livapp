@@ -319,7 +319,7 @@ CREATE INDEX idx_onboarding_token ON onboarding_v2_answers(deferred_session_toke
 ### Assets
 
 **Vídeos (H.264 baseline MP4 + fallback WebM):**
-- `liv-wave.mp4` — Tela 2 (acenando, loop 4s)
+- `liv-oi.mp4` — Tela 2 (acenando, loop 4s)
 - `liv-thinking.mp4` — UAU 1/3 (pensando 2s)
 - `liv-cheer.mp4` — Mistake Review reward
 - `liv-clap.mp4` — Tela 11 Final Reveal
@@ -393,7 +393,7 @@ realista-natureza.png    cartoon-natureza.png   foto-natureza.png
 
 | Elemento | Conteúdo |
 |----------|----------|
-| Centro da tela | `<LivVideo src="liv-wave.mp4" loop />` |
+| Centro da tela | `<LivVideo src="liv-oi.mp4" loop />` |
 | Balão da LIV | **"Oi! Sou a LIV. Vou te ajudar a dominar IA pra usar onde você quiser — trabalho, projetos, vida. Vamos começar?"** |
 | CTA | CONTINUAR (botão verde forte) |
 | Progress bar | NÃO mostra ainda (começa na Tela 3) |

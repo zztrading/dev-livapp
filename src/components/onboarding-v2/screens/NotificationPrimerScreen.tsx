@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Bell, BellRing } from "lucide-react";
+import { ArrowLeft, BellRing } from "lucide-react";
 
 interface NotificationPrimerScreenProps {
   onResult: (result: "granted" | "denied" | "dismissed" | "unsupported") => void;
@@ -63,11 +63,10 @@ export const NotificationPrimerScreen = ({
           transition={{ delay: 0.1, duration: 0.35 }}
         >
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
-            Vou te lembrar todo dia
+            Vou te lembrar de praticar até virar hábito.
           </h1>
           <p className="text-sm sm:text-base text-slate-600 mt-3 leading-relaxed max-w-xs mx-auto">
-            Aprender IA vira hábito mais fácil com uma cutucadinha diária.
-            Sem spam — só na hora certa pra você praticar.
+            Você pode mudar isso depois nas configurações.
           </p>
         </motion.div>
 

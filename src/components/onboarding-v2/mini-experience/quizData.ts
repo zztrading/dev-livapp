@@ -72,7 +72,7 @@ export const QUIZZES: QuizDefinition[] = [
       {
         id: "b",
         label:
-          "\"Aja como Diretor de Criação sênior com 15 anos de experiência em campanhas premiadas\"",
+          "\"Aja como especialista experiente da área que estou perguntando, com 15 anos de prática\"",
       },
       {
         id: "c",
@@ -82,8 +82,8 @@ export const QUIZZES: QuizDefinition[] = [
     correctId: "b",
     feedback: {
       a: "Quase. \"Seja inteligente\" não diz NADA pra IA — ela não sabe o que é inteligente no SEU contexto. Persona precisa ser específica.",
-      b: "Persona específica + contexto rico = IA muda de patamar. Sente a diferença entre \"especialista\" (vago) e \"Diretor sênior com 15 anos\" (específico)?",
-      c: "Faltou especificidade. \"Especialista\" é vago. \"Diretor de Criação sênior com 15 anos\" faz a IA assumir voz, vocabulário e referências reais.",
+      b: "Isso. Especificidade + tempo de experiência = IA muda o tom completamente.",
+      c: "Quase. Faltou especificidade — \"experiente\" e \"15 anos de prática\" fazem a diferença.",
     },
   },
 

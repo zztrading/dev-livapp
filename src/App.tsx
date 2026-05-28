@@ -88,6 +88,8 @@ const AdminV5CardConfig = lazyRetry(() => import("./pages/AdminV5CardConfig"));
 const AdminV5CardsReport = lazyRetry(() => import("./pages/AdminV5CardsReport"));
 const AdminTestCardSync = lazyRetry(() => import("./pages/AdminTestCardSync"));
 const TestCard = lazyRetry(() => import("./pages/TestCard"));
+const AdminMigrationsStatus = lazyRetry(() => import("./pages/AdminMigrationsStatus"));
+const AdminDbStatus = lazyRetry(() => import("./pages/AdminDbStatus"));
 const AdminV7Create = lazyRetry(() => import("./pages/AdminV7Create"));
 const AdminV7Preview = lazyRetry(() => import("./pages/AdminV7Preview"));
 const AdminV7vv = lazyRetry(() => import("./pages/AdminV7vv"));
@@ -220,6 +222,8 @@ const App = () => (
                 <Route path="/v7/:lessonId" element={<V7CinematicPlayer />} />
                 <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
                 <Route path="/admin/users" element={<AdminOnlyRoute><AdminUserManagement /></AdminOnlyRoute>} />
+                <Route path="/admin/migrations-status" element={<AdminOnlyRoute><AdminMigrationsStatus /></AdminOnlyRoute>} />
+                <Route path="/admin/db-status" element={<AdminOnlyRoute><AdminDbStatus /></AdminOnlyRoute>} />
                 <Route path="/admin/pipeline" element={<AdminRoute><AdminPipelineHub /></AdminRoute>} />
                 <Route path="/admin/pipeline/create-single" element={<AdminRoute><AdminPipelineCreateSingle /></AdminRoute>} />
                 <Route path="/admin/pipeline/create-batch" element={<AdminRoute><AdminPipelineCreateBatch /></AdminRoute>} />

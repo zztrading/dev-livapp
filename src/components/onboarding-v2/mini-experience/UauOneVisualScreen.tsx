@@ -40,7 +40,6 @@ export const UauOneVisualScreen = ({
 
   const canGenerate = style !== null && theme !== null;
 
-  // Cleanup do timer em unmount (fix #9)
   useEffect(
     () => () => {
       if (generateTimerRef.current) clearTimeout(generateTimerRef.current);
@@ -58,7 +57,7 @@ export const UauOneVisualScreen = ({
         particleCount: 60,
         spread: 80,
         origin: { y: 0.45 },
-        colors: ["#6366f1", "#8b5cf6", "#fbbf24", "#10b981"],
+        colors: ["#6D28D9", "#8B5CF6", "#fbbf24", "#10b981"],
         scalar: 0.85,
       });
     }, 2000);
@@ -74,140 +73,146 @@ export const UauOneVisualScreen = ({
     }
   }, [continuing, style, theme, onComplete]);
 
-  // Imagens ficam no bucket Storage 'uau-images' (URL pública, sem auth).
-  // Geradas via /admin/uau-images-gen.
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? "";
   const imageSrc =
     style && theme
       ? `${supabaseUrl}/storage/v1/object/public/uau-images/${style}-${theme}.png`
       : "";
 
+  const showStickyCta =
+    (phase === "choosing" && canGenerate) || phase === "result";
+  const stickyDisabled = phase === "choosing" ? !canGenerate : continuing;
+  const stickyLabel =
+    phase === "result"
+      ? continuing
+        ? "Continuando…"
+        : "Continuar"
+      : "Gerar com IA";
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35 }}
-      className="min-h-screen flex flex-col px-5 sm:px-6 pt-16 pb-10"
-    >
-      <div className="max-w-md w-full mx-auto flex flex-col flex-1">
-        <p className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3">
+    <div className="min-h-screen flex flex-col bg-white pt-24">
+      <main className="flex-1 overflow-y-auto px-4 pt-4 pb-32 max-w-md w-full mx-auto flex flex-col gap-3.5">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-violet-700">
           {stepLabel}
-        </p>
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug mb-2">
-          Hora de testar seu instinto visual.
-        </h1>
-        <p className="text-sm text-slate-600 leading-relaxed mb-6">
+        </span>
+
+        <h1 className="text-[20px] sm:text-[23px] font-bold leading-[1.28] tracking-[-0.025em] text-zinc-950">
+          <span className="block text-[14.5px] sm:text-[15.5px] font-normal text-zinc-700 leading-[1.5] mb-2 tracking-[-0.005em]">
+            Hora de testar seu instinto visual.
+          </span>
           Escolha estilo + tema. Eu gero em 2 segundos.
-        </p>
+        </h1>
 
         {/* Chips de estilo */}
-        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-          Estilo
-        </p>
-        <div className="grid grid-cols-3 gap-2 mb-5">
-          {STYLES.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => phase === "choosing" && setStyle(s.id)}
-              disabled={phase !== "choosing"}
-              className={`flex flex-col items-center gap-1 px-2 py-3 rounded-2xl border-2 transition-all ${
-                style === s.id
-                  ? "border-indigo-500 bg-indigo-50"
-                  : "border-slate-200 bg-white hover:border-indigo-300"
-              } ${phase !== "choosing" ? "opacity-60 cursor-not-allowed" : ""}`}
-            >
-              <span className="text-2xl" aria-hidden="true">
-                {s.emoji}
-              </span>
-              <span className="text-xs font-semibold text-slate-700">{s.label}</span>
-            </button>
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-zinc-500">
+            Estilo
+          </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {STYLES.map((s) => {
+              const picked = style === s.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => phase === "choosing" && setStyle(s.id)}
+                  disabled={phase !== "choosing"}
+                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-[14px] border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 active:scale-[0.98] ${
+                    picked
+                      ? "border-violet-700 bg-violet-50"
+                      : "border-zinc-200 bg-white hover:border-zinc-300"
+                  } ${phase !== "choosing" ? "opacity-60 cursor-not-allowed" : ""}`}
+                >
+                  <span className="text-[20px] leading-none" aria-hidden="true">
+                    {s.emoji}
+                  </span>
+                  <span className="text-[12px] font-semibold text-zinc-800">
+                    {s.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Chips de tema */}
-        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-          Tema
-        </p>
-        <div className="grid grid-cols-3 gap-2 mb-6">
-          {THEMES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => phase === "choosing" && setTheme(t.id)}
-              disabled={phase !== "choosing"}
-              className={`flex flex-col items-center gap-1 px-2 py-3 rounded-2xl border-2 transition-all ${
-                theme === t.id
-                  ? "border-indigo-500 bg-indigo-50"
-                  : "border-slate-200 bg-white hover:border-indigo-300"
-              } ${phase !== "choosing" ? "opacity-60 cursor-not-allowed" : ""}`}
-            >
-              <span className="text-2xl" aria-hidden="true">
-                {t.emoji}
-              </span>
-              <span className="text-xs font-semibold text-slate-700">{t.label}</span>
-            </button>
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-zinc-500">
+            Tema
+          </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {THEMES.map((t) => {
+              const picked = theme === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => phase === "choosing" && setTheme(t.id)}
+                  disabled={phase !== "choosing"}
+                  className={`flex flex-col items-center gap-1 px-2 py-2.5 rounded-[14px] border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 active:scale-[0.98] ${
+                    picked
+                      ? "border-violet-700 bg-violet-50"
+                      : "border-zinc-200 bg-white hover:border-zinc-300"
+                  } ${phase !== "choosing" ? "opacity-60 cursor-not-allowed" : ""}`}
+                >
+                  <span className="text-[20px] leading-none" aria-hidden="true">
+                    {t.emoji}
+                  </span>
+                  <span className="text-[12px] font-semibold text-zinc-800">
+                    {t.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Botão gerar / spinner / resultado */}
+        {/* Generating spinner / Resultado */}
         <AnimatePresence mode="wait">
-          {phase === "choosing" && (
-            <motion.button
-              key="cta-gerar"
-              type="button"
-              onClick={handleGenerate}
-              disabled={!canGenerate}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              whileTap={canGenerate ? { scale: 0.97 } : undefined}
-              className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-base font-bold shadow-lg shadow-indigo-500/25 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
-            >
-              <Sparkles className="w-5 h-5" />
-              Gerar com IA
-            </motion.button>
-          )}
-
           {phase === "generating" && (
             <motion.div
               key="loading"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center gap-3 py-6"
+              className="flex flex-col items-center gap-2 py-6"
               role="status"
               aria-live="polite"
             >
-              <Loader2 className="w-10 h-10 animate-spin text-indigo-500" />
-              <p className="text-sm text-slate-600">A Liv tá pensando...</p>
-              <p className="text-xs text-slate-400">criando sua imagem</p>
+              <Loader2 className="w-8 h-8 animate-spin text-violet-700" />
+              <p className="text-[13px] text-zinc-600">A Liv tá pensando…</p>
+              <p className="text-[11px] text-zinc-400">criando sua imagem</p>
             </motion.div>
           )}
 
           {phase === "result" && (
             <motion.div
               key="result"
-              initial={{ opacity: 0, y: 12 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
-              className="flex flex-col gap-4"
+              className="flex flex-col gap-3"
             >
               <motion.div
-                initial={{ scale: 0.92, opacity: 0 }}
+                initial={{ scale: 0.94, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ duration: 0.45, type: "spring", stiffness: 180 }}
-                className="relative w-full aspect-square rounded-2xl overflow-hidden border-2 border-indigo-200 shadow-lg shadow-indigo-500/20"
+                className="relative w-full aspect-square rounded-[14px] overflow-hidden border border-zinc-200"
               >
                 {imageError ? (
-                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-indigo-200 via-violet-300 to-pink-300 text-white text-center p-4">
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-violet-200 via-violet-300 to-pink-300 text-white text-center p-4">
                     <div>
-                      <Sparkles className="w-10 h-10 mx-auto mb-2" aria-hidden="true" />
-                      <p className="text-sm font-bold">
+                      <Sparkles
+                        className="w-8 h-8 mx-auto mb-2"
+                        aria-hidden="true"
+                      />
+                      <p className="text-[13px] font-bold">
                         {STYLES.find((s) => s.id === style)?.label} ×{" "}
                         {THEMES.find((t) => t.id === theme)?.label}
                       </p>
-                      <p className="text-xs opacity-90 mt-1">imagem mockup pendente</p>
+                      <p className="text-[11px] opacity-90 mt-1">
+                        imagem mockup pendente
+                      </p>
                     </div>
                   </div>
                 ) : (
@@ -220,25 +225,70 @@ export const UauOneVisualScreen = ({
                 )}
               </motion.div>
 
-              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4">
-                <p className="text-sm text-emerald-900 leading-relaxed">
-                  <span className="font-bold">✨ Pronto.</span> Isso foi feito com IA em 2 segundos.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleContinue}
-                disabled={continuing}
-                className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-base font-bold shadow-lg shadow-indigo-500/25 disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+              <div
+                className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-emerald-50 text-emerald-900 text-[12.5px] leading-[1.5]"
+                role="status"
+                aria-live="polite"
               >
-                Continuar
-                <ArrowRight className="w-5 h-5" />
-              </button>
+                <span
+                  className="flex-shrink-0 w-[18px] h-[18px] mt-[1px] text-emerald-600"
+                  aria-hidden="true"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="12" r="10" />
+                    <path
+                      d="m8 12 3 3 5-6"
+                      stroke="white"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      fill="none"
+                    />
+                  </svg>
+                </span>
+                <div>
+                  <strong className="font-bold">Pronto.</strong> Isso foi feito
+                  com IA em 2 segundos.
+                </div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
-    </motion.div>
+      </main>
+
+      {/* CTA sticky bottom */}
+      <AnimatePresence>
+        {showStickyCta && (
+          <motion.footer
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white/95 to-transparent border-t border-zinc-100 px-4 pt-2.5 z-20"
+            style={{ paddingBottom: "calc(12px + env(safe-area-inset-bottom))" }}
+          >
+            <div className="max-w-md mx-auto">
+              <button
+                type="button"
+                onClick={phase === "result" ? handleContinue : handleGenerate}
+                disabled={stickyDisabled}
+                className={`w-full flex items-center justify-center gap-2 min-h-[44px] px-5 py-3 rounded-[14px] text-[14px] font-semibold tracking-[-0.005em] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 active:scale-[0.99] ${
+                  stickyDisabled
+                    ? "bg-zinc-300 text-white cursor-not-allowed"
+                    : phase === "result"
+                      ? "bg-violet-700 text-white hover:bg-violet-800"
+                      : "bg-zinc-950 text-white hover:bg-zinc-800"
+                }`}
+              >
+                {phase === "choosing" && <Sparkles className="w-4 h-4" />}
+                {stickyLabel}
+                {phase === "result" && !continuing && (
+                  <ArrowRight className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+          </motion.footer>
+        )}
+      </AnimatePresence>
+    </div>
   );
 };

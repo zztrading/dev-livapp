@@ -43,7 +43,7 @@ export const UauOneWritingScreen = ({
           particleCount: 50,
           spread: 70,
           origin: { y: 0.55 },
-          colors: ["#6366f1", "#8b5cf6", "#10b981", "#fbbf24"],
+          colors: ["#6D28D9", "#8B5CF6", "#10b981", "#fbbf24"],
           scalar: 0.8,
         });
         return;
@@ -52,7 +52,6 @@ export const UauOneWritingScreen = ({
     }, 22);
   }, []);
 
-  // Cleanup de timers em unmount (fix #10)
   useEffect(
     () => () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -80,48 +79,48 @@ export const UauOneWritingScreen = ({
     }
   }, [continuing, onComplete]);
 
+  const finalReady = typedText.length >= EMAIL_AFTER.length;
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35 }}
-      className="min-h-screen flex flex-col px-5 sm:px-6 pt-16 pb-10"
-    >
-      <div className="max-w-md w-full mx-auto flex flex-col flex-1">
-        <p className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3">
+    <div className="min-h-screen flex flex-col bg-white pt-24">
+      <main className="flex-1 overflow-y-auto px-4 pt-4 pb-32 max-w-md w-full mx-auto flex flex-col gap-3.5">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-violet-700">
           {stepLabel}
-        </p>
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 leading-snug mb-2">
-          Olha esse email "ok".
-        </h1>
-        <p className="text-sm text-slate-600 leading-relaxed mb-6">
+        </span>
+
+        <h1 className="text-[20px] sm:text-[23px] font-bold leading-[1.28] tracking-[-0.025em] text-zinc-950">
+          <span className="block text-[14.5px] sm:text-[15.5px] font-normal text-zinc-700 leading-[1.5] mb-2 tracking-[-0.005em]">
+            Olha esse email "ok".
+          </span>
           A IA refaz pro nível profissional em 3 segundos.
-        </p>
+        </h1>
 
         {/* Email ANTES */}
-        <div className="mb-4">
-          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-zinc-400">
             Antes
           </p>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm text-slate-700 italic leading-relaxed">{EMAIL_BEFORE}</p>
+          <div className="rounded-[14px] border border-zinc-200 bg-zinc-50 p-3.5">
+            <p className="text-[13.5px] text-zinc-700 italic leading-[1.5]">
+              {EMAIL_BEFORE}
+            </p>
           </div>
         </div>
 
-        {/* CTA / Spinner / Resultado */}
+        {/* Reescrever / Spinner / Resultado */}
         <AnimatePresence mode="wait">
           {phase === "ready" && (
             <motion.button
-              key="cta"
+              key="cta-rewrite"
               type="button"
               onClick={handleRewrite}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              whileTap={{ scale: 0.97 }}
-              className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-base font-bold shadow-lg shadow-indigo-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+              whileTap={{ scale: 0.99 }}
+              className="w-full flex items-center justify-center gap-2 min-h-[44px] px-5 py-3 rounded-[14px] bg-zinc-950 text-white text-[14px] font-semibold tracking-[-0.005em] hover:bg-zinc-800 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2"
             >
-              <Sparkles className="w-5 h-5" />
+              <Sparkles className="w-4 h-4" />
               Reescrever com IA
             </motion.button>
           )}
@@ -132,12 +131,12 @@ export const UauOneWritingScreen = ({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex items-center justify-center gap-2 py-4 text-slate-600"
+              className="flex items-center justify-center gap-2 py-4 text-zinc-600"
               role="status"
               aria-live="polite"
             >
-              <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
-              <span className="text-sm">A Liv tá reescrevendo...</span>
+              <Loader2 className="w-4 h-4 animate-spin text-violet-700" />
+              <span className="text-[13px]">A Liv tá reescrevendo…</span>
             </motion.div>
           )}
 
@@ -146,48 +145,82 @@ export const UauOneWritingScreen = ({
               key="result"
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col gap-4"
+              className="flex flex-col gap-3"
             >
-              <div>
-                <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+              <div className="flex flex-col gap-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-emerald-700 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" /> Depois
                 </p>
-                <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4 min-h-[180px]">
-                  <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap font-medium">
+                <div className="rounded-[14px] border border-emerald-200 bg-emerald-50 p-3.5 min-h-[170px]">
+                  <p className="text-[13.5px] text-zinc-800 leading-[1.55] whitespace-pre-wrap font-medium">
                     {typedText}
-                    {typedText.length < EMAIL_AFTER.length && (
-                      <span className="inline-block w-0.5 h-4 bg-indigo-500 animate-pulse ml-0.5 align-middle" />
+                    {!finalReady && (
+                      <span className="inline-block w-0.5 h-3.5 bg-violet-700 animate-pulse ml-0.5 align-middle" />
                     )}
                   </p>
                 </div>
               </div>
 
-              {typedText.length >= EMAIL_AFTER.length && (
+              {finalReady && (
                 <motion.div
-                  initial={{ opacity: 0, y: 8 }}
+                  initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="flex flex-col gap-3"
+                  transition={{ duration: 0.26 }}
+                  className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-emerald-50 text-emerald-900 text-[12.5px] leading-[1.5]"
+                  role="status"
+                  aria-live="polite"
                 >
-                  <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-3">
-                    <p className="text-sm text-emerald-900 leading-relaxed">
-                      <span className="font-bold">✨ Pronto.</span> Email casual → profissional em 3 segundos.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleContinue}
-                    disabled={continuing}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-base font-bold shadow-lg shadow-indigo-500/25 disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+                  <span
+                    className="flex-shrink-0 w-[18px] h-[18px] mt-[1px] text-emerald-600"
+                    aria-hidden="true"
                   >
-                    Continuar
-                    <ArrowRight className="w-5 h-5" />
-                  </button>
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="12" r="10" />
+                      <path
+                        d="m8 12 3 3 5-6"
+                        stroke="white"
+                        strokeWidth="2.4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        fill="none"
+                      />
+                    </svg>
+                  </span>
+                  <div>
+                    <strong className="font-bold">Pronto.</strong> Email casual
+                    → profissional em 3 segundos.
+                  </div>
                 </motion.div>
               )}
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
-    </motion.div>
+      </main>
+
+      {/* CTA sticky bottom — só aparece quando typewriter terminou */}
+      <AnimatePresence>
+        {phase === "result" && finalReady && (
+          <motion.footer
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white/95 to-transparent border-t border-zinc-100 px-4 pt-2.5 z-20"
+            style={{ paddingBottom: "calc(12px + env(safe-area-inset-bottom))" }}
+          >
+            <div className="max-w-md mx-auto">
+              <button
+                type="button"
+                onClick={handleContinue}
+                disabled={continuing}
+                className="w-full flex items-center justify-center gap-2 min-h-[44px] px-5 py-3 rounded-[14px] bg-violet-700 text-white text-[14px] font-semibold tracking-[-0.005em] hover:bg-violet-800 disabled:opacity-60 disabled:cursor-not-allowed transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 focus-visible:ring-offset-2 active:scale-[0.99]"
+              >
+                {continuing ? "Continuando…" : "Continuar"}
+                {!continuing && <ArrowRight className="w-4 h-4" />}
+              </button>
+            </div>
+          </motion.footer>
+        )}
+      </AnimatePresence>
+    </div>
   );
 };

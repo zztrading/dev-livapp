@@ -8,12 +8,13 @@ interface AiLevelScreenProps {
   onBack?: () => void;
 }
 
-// Removidas as opções negativas do v1 ("intimidado", "medo de substituição").
+// Valores devem bater com CHECK constraint da migration M0.1:
+//   ai_usage_level IN ('nunca','testei','as_vezes','todo_dia')
 const OPTIONS = [
-  { value: "none", label: "Nunca usei", subtitle: "Quero começar do zero", emoji: "😬" },
-  { value: "beginner", label: "Já mexi um pouco", subtitle: "Curiosidade sem prática", emoji: "🤔" },
-  { value: "intermediate", label: "Uso às vezes", subtitle: "Em tarefas pontuais", emoji: "😊" },
-  { value: "advanced", label: "Uso direto, todo dia", subtitle: "Já é parte do meu dia", emoji: "😎" },
+  { value: "nunca", label: "Nunca usei IA", emoji: "😬" },
+  { value: "testei", label: "Já testei algumas vezes", emoji: "🤔" },
+  { value: "as_vezes", label: "Uso de vez em quando", emoji: "😊" },
+  { value: "todo_dia", label: "Uso todo dia", emoji: "😎" },
 ];
 
 export const AiLevelScreen = ({
@@ -24,7 +25,7 @@ export const AiLevelScreen = ({
   const gate = useSingleChoiceGate(onSelect, selected);
   return (
     <QuestionLayout
-      question="Quanto você usa IA hoje?"
+      question="Qual é seu nível com IA hoje?"
       subtitle="Isso ajuda a LIV a calibrar a primeira aula."
       onBack={onBack}
     >
@@ -33,7 +34,6 @@ export const AiLevelScreen = ({
           key={opt.value}
           emoji={opt.emoji}
           label={opt.label}
-          subtitle={opt.subtitle}
           selected={gate.selected === opt.value}
           disabled={gate.isLocked}
           onClick={() => gate.handlePick(opt.value)}

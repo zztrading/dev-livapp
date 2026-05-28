@@ -189,12 +189,12 @@ verify_jwt = false
 [functions.create-checkout-session]
 verify_jwt = true
 
-[functions.stripe-webhook]
+[functions.redeem-deferred-token]
 verify_jwt = false
 
-[functions.change-subscription-plan]
-verify_jwt = true
+[functions.migrations-status]
+verify_jwt = false
 
-[functions.create-customer-portal-session]
-verify_jwt = true
+[functions.db-status]
+verify_jwt = false
 

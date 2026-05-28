@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Users, Shield, ShieldCheck, User, Loader2, Search, RefreshCw, Trash2, Ban, CheckCircle, MoreHorizontal, KeyRound } from 'lucide-react';
+import { ArrowLeft, Users, Shield, ShieldCheck, User, Loader2, Search, RefreshCw, Trash2, Ban, CheckCircle, MoreHorizontal, KeyRound, Flame, BookOpen, CreditCard, TrendingUp, UserCheck, Activity } from 'lucide-react';
 import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import {
@@ -44,6 +44,7 @@ interface UserWithRole {
   total_lessons_completed: number | null;
   power_score: number | null;
   coins: number | null;
+  streak_days: number | null;
   is_active: boolean;
   role: AppRole;
 }
@@ -92,7 +93,7 @@ export default function AdminUserManagement() {
     try {
       const { data: usersData, error: usersError } = await supabase
         .from('users')
-        .select('id, name, email, plan, created_at, total_lessons_completed, power_score, coins, is_active')
+        .select('id, name, email, plan, created_at, total_lessons_completed, power_score, coins, streak_days, is_active')
         .order('created_at', { ascending: false });
 
       if (usersError) throw usersError;
@@ -267,9 +268,32 @@ export default function AdminUserManagement() {
     supervisors: users.filter((u) => u.role === 'supervisor').length,
     regular: users.filter((u) => u.role === 'user').length,
     suspended: users.filter((u) => !u.is_active).length,
+    active: users.filter((u) => u.is_active).length,
   };
 
+  // Plan distribution
+  const planCounts = users.reduce<Record<string, number>>((acc, u) => {
+    const p = (u.plan || 'basico').toLowerCase();
+    acc[p] = (acc[p] || 0) + 1;
+    return acc;
+  }, {});
+  const planEntries = Object.entries(planCounts).sort((a, b) => b[1] - a[1]);
+
+  // Aggregates
+  const totalLessons = users.reduce((s, u) => s + (u.total_lessons_completed || 0), 0);
+  const avgLessons = users.length ? totalLessons / users.length : 0;
+  const totalStreak = users.reduce((s, u) => s + (u.streak_days || 0), 0);
+  const avgStreak = users.length ? totalStreak / users.length : 0;
+  const maxStreak = users.reduce((m, u) => Math.max(m, u.streak_days || 0), 0);
+  const totalXP = users.reduce((s, u) => s + (u.power_score || 0), 0);
+  const avgXP = users.length ? totalXP / users.length : 0;
+  const engagedUsers = users.filter((u) => (u.total_lessons_completed || 0) > 0).length;
+  const engagementRate = users.length ? (engagedUsers / users.length) * 100 : 0;
+
   const dialogContent = getDialogContent();
+
+  const formatNum = (n: number, digits = 0) =>
+    n.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-muted p-6">
@@ -285,43 +309,152 @@ export default function AdminUserManagement() {
             Gestão de Usuários
           </h1>
           <p className="text-muted-foreground">
-            Gerencie permissões, suspensões e remoções de usuários
+            Métricas agregadas em tempo real, permissões, suspensões e remoções
           </p>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {/* ============ DASHBOARD DE MÉTRICAS (read-only) ============ */}
+        <section aria-labelledby="metrics-heading" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 id="metrics-heading" className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Visão Geral
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Atualizado · {loading ? 'carregando...' : 'agora'}
+            </span>
+          </div>
+
+          {/* Primary metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="!bg-card border-primary/20">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <Users className="w-3.5 h-3.5" /> Total de usuários
+                </div>
+                <p className="text-3xl font-bold">{formatNum(stats.total)}</p>
+                <p className="text-xs text-emerald-500 mt-1">{stats.active} ativos</p>
+              </CardContent>
+            </Card>
+            <Card className="!bg-card border-emerald-500/20">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <UserCheck className="w-3.5 h-3.5" /> Engajamento
+                </div>
+                <p className="text-3xl font-bold text-emerald-500">{formatNum(engagementRate, 0)}%</p>
+                <p className="text-xs text-muted-foreground mt-1">{engagedUsers} com aulas concluídas</p>
+              </CardContent>
+            </Card>
+            <Card className="!bg-card border-orange-500/20">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <Flame className="w-3.5 h-3.5" /> Streak médio
+                </div>
+                <p className="text-3xl font-bold text-orange-500">{formatNum(avgStreak, 1)}</p>
+                <p className="text-xs text-muted-foreground mt-1">máximo: {maxStreak} dias</p>
+              </CardContent>
+            </Card>
+            <Card className="!bg-card border-violet-500/20">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <BookOpen className="w-3.5 h-3.5" /> Progresso médio
+                </div>
+                <p className="text-3xl font-bold text-violet-500">{formatNum(avgLessons, 1)}</p>
+                <p className="text-xs text-muted-foreground mt-1">aulas / usuário</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Secondary metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="!bg-card">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <TrendingUp className="w-3.5 h-3.5" /> XP médio
+                </div>
+                <p className="text-2xl font-bold">{formatNum(avgXP, 0)}</p>
+                <p className="text-xs text-muted-foreground mt-1">total: {formatNum(totalXP)}</p>
+              </CardContent>
+            </Card>
+            <Card className="!bg-card">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <Activity className="w-3.5 h-3.5" /> Aulas concluídas
+                </div>
+                <p className="text-2xl font-bold">{formatNum(totalLessons)}</p>
+                <p className="text-xs text-muted-foreground mt-1">soma geral</p>
+              </CardContent>
+            </Card>
+            <Card className="!bg-card border-red-500/20">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <Shield className="w-3.5 h-3.5" /> Equipe
+                </div>
+                <p className="text-2xl font-bold">
+                  <span className="text-red-400">{stats.admins}</span>
+                  <span className="text-muted-foreground text-sm font-normal"> + </span>
+                  <span className="text-amber-400">{stats.supervisors}</span>
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">admins + supervisores</p>
+              </CardContent>
+            </Card>
+            <Card className="!bg-card border-orange-500/20">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                  <Ban className="w-3.5 h-3.5" /> Suspensos
+                </div>
+                <p className="text-2xl font-bold text-orange-400">{stats.suspended}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {stats.total ? formatNum((stats.suspended / stats.total) * 100, 1) : 0}% do total
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Plans distribution */}
           <Card className="!bg-card">
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold">{stats.total}</p>
-              <p className="text-xs text-muted-foreground">Total</p>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CreditCard className="w-4 h-4" /> Distribuição por plano
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {planEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sem dados</p>
+              ) : (
+                planEntries.map(([plan, count]) => {
+                  const pct = stats.total ? (count / stats.total) * 100 : 0;
+                  return (
+                    <div key={plan} className="space-y-1">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="capitalize font-medium">{plan}</span>
+                        <span className="text-muted-foreground">
+                          {count} <span className="text-xs">({formatNum(pct, 1)}%)</span>
+                        </span>
+                      </div>
+                      <div className="h-2 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-primary to-violet-500 rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </CardContent>
           </Card>
-          <Card className="!bg-card border-red-500/30">
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold text-red-400">{stats.admins}</p>
-              <p className="text-xs text-muted-foreground">Admins</p>
-            </CardContent>
-          </Card>
-          <Card className="!bg-card border-amber-500/30">
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold text-amber-400">{stats.supervisors}</p>
-              <p className="text-xs text-muted-foreground">Supervisores</p>
-            </CardContent>
-          </Card>
-          <Card className="!bg-card border-emerald-500/30">
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold text-emerald-400">{stats.regular}</p>
-              <p className="text-xs text-muted-foreground">Usuários</p>
-            </CardContent>
-          </Card>
-          <Card className="!bg-card border-orange-500/30">
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold text-orange-400">{stats.suspended}</p>
-              <p className="text-xs text-muted-foreground">Suspensos</p>
-            </CardContent>
-          </Card>
+        </section>
+
+        {/* ============ TABELA DE GESTÃO ============ */}
+        <div className="flex items-center justify-between pt-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Lista de Usuários
+          </h2>
+          <span className="text-xs text-muted-foreground">
+            {users.length > 0 && `${users.length} registro${users.length === 1 ? '' : 's'}`}
+          </span>
         </div>
+
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3">

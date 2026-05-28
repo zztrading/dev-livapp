@@ -88,7 +88,7 @@ export default function Profile() {
         phone: data.phone || '',
         profession: data.profession || '',
         avatar_url: data.avatar_url || '',
-        notifications_enabled: data.notifications_enabled ?? true,
+        notifications_enabled: data?.notifications_enabled ?? true,
         plan: data.plan || 'basico',
         total_lessons_completed: data.total_lessons_completed || 0,
         streak_days: data.streak_days || 0,
@@ -491,7 +491,7 @@ export default function Profile() {
                 </p>
                 )}
                 {!subscriptionStatusLabel && <div className="mb-4" />}
-                <Button
+                <Button 
                   className="w-full"
                   onClick={() => navigate('/pricing')}
                 >

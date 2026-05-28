@@ -5,10 +5,12 @@ import type { DominioLevel } from "@/components/onboarding-v2/mini-experience/us
 import { OnboardingV2Loading } from "./OnboardingV2Loading";
 import { LivIntroScreen } from "./screens/LivIntroScreen";
 import { AttributionScreen } from "./screens/AttributionScreen";
+import { HookScreen } from "./screens/HookScreen";
 import { MotivationScreen } from "./screens/MotivationScreen";
 import { AiLevelScreen } from "./screens/AiLevelScreen";
 import { PromiseScreen } from "./screens/PromiseScreen";
 import { DailyGoalScreen } from "./screens/DailyGoalScreen";
+import { ChoosePathScreen } from "./screens/ChoosePathScreen";
 import { NotificationPrimerScreen } from "./screens/NotificationPrimerScreen";
 import { PromptKnowledgeScreen } from "./screens/PromptKnowledgeScreen";
 import { RevealScreen } from "./screens/RevealScreen";
@@ -42,10 +44,13 @@ export const OnboardingV2Flow = () => {
     trackEvent(`step_view_${step}`, { step_index: stepIndex });
   }, [ready, step, stepIndex, trackEvent]);
 
-  // Helper: salva resposta + avança
+  // Helper: salva resposta + avança SE persistiu com sucesso.
+  // Se saveAnswer retorna false (erro), toast já foi disparado no hook;
+  // não avança, deixando o usuário tentar de novo na mesma tela.
   const handleAnswer = useCallback(
     async (questionId: V2QuestionId, value: string) => {
-      await saveAnswer(questionId, value);
+      const ok = await saveAnswer(questionId, value);
+      if (!ok) return;
       trackEvent("answer_saved", { question_id: questionId, value });
       goNext();
     },
@@ -56,8 +61,8 @@ export const OnboardingV2Flow = () => {
 
   return (
     <div className="min-h-screen bg-white text-slate-900">
-      {/* Progress bar global (oculta no mini-experience que tem barra própria) */}
-      {step !== "mini_experience" && (
+      {/* Progress bar global. progressPercent é null nas Telas 2 e 4 (spec). */}
+      {progressPercent !== null && (
         <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-slate-100">
           <div
             className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-500"
@@ -78,6 +83,15 @@ export const OnboardingV2Flow = () => {
               key="attribution"
               selected={answers.attribution}
               onSelect={(v) => handleAnswer("attribution", v)}
+              onBack={goBack}
+            />
+          )}
+
+          {step === "hook" && (
+            <HookScreen
+              key="hook"
+              selected={answers.hook}
+              onSelect={(v) => handleAnswer("hook", v)}
               onBack={goBack}
             />
           )}
@@ -117,21 +131,11 @@ export const OnboardingV2Flow = () => {
             />
           )}
 
-          {step === "notification" && (
-            <NotificationPrimerScreen
-              key="notification"
-              onResult={(result) => {
-                handleAnswer("notification_opt", result);
-              }}
-              onBack={goBack}
-            />
-          )}
-
-          {step === "prompt_knowledge" && (
-            <PromptKnowledgeScreen
-              key="prompt_knowledge"
-              selected={answers.prompt_knowledge}
-              onSelect={(v) => handleAnswer("prompt_knowledge", v)}
+          {step === "choose_path" && (
+            <ChoosePathScreen
+              key="choose_path"
+              selected={answers.choose_path}
+              onSelect={(v) => handleAnswer("choose_path", v)}
               onBack={goBack}
             />
           )}
@@ -156,6 +160,17 @@ export const OnboardingV2Flow = () => {
               onContinue={goNext}
             />
           )}
+
+          {step === "notification" && (
+            <NotificationPrimerScreen
+              key="notification"
+              onResult={(result) => {
+                handleAnswer("notification_opt", result);
+              }}
+              onBack={goBack}
+            />
+          )}
+
           {step === "signup_deferred" && (
             <SignupDeferredScreen key="signup_deferred" sessionId={sessionId} />
           )}

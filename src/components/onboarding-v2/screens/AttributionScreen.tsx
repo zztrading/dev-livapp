@@ -11,10 +11,10 @@ interface AttributionScreenProps {
 const OPTIONS = [
   { value: "instagram", label: "Instagram", emoji: "📱" },
   { value: "google", label: "Google", emoji: "🔍" },
-  { value: "tiktok", label: "TikTok", emoji: "🎵" },
-  { value: "youtube", label: "YouTube", emoji: "▶️" },
-  { value: "referral", label: "Amigo ou família", emoji: "👥" },
-  { value: "other", label: "Outro", emoji: "✨" },
+  { value: "tiktok", label: "TikTok", emoji: "▶️" },
+  { value: "referral", label: "Amigo/Família", emoji: "👥" },
+  { value: "youtube", label: "YouTube", emoji: "📺" },
+  { value: "other", label: "Outro", emoji: "📰" },
 ];
 
 export const AttributionScreen = ({

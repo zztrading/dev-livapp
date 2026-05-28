@@ -1,15 +1,18 @@
 /**
- * Tela 10 do Onboarding V2 — "Mini-experiência IA".
- * State machine interno com 7 sub-telas (Filter → 3 quizzes → 2 UAUs → 1 quiz).
+ * Tela 10 do Onboarding V2 — "Mini-experiência IA" / Desafio.
  *
- * Cada sub-tela monta seu próprio screen e chama o hook useMiniExperience
- * pra persistir resposta + pontuar + avançar.
+ * State machine interno com 10 sub-telas (spec onboarding v2):
+ *   1/10 filter         · 2/10 quiz_input   · 3/10 quiz_persona · 4/10 quiz_context
+ *   5/10 uau_one        · 6/10 uau_two_chips · 7/10 uau_two_swot · 8/10 quiz_critique
+ *   9/10 mistake_review · 10/10 antecipacao
  *
- * Quando termina: chama complete() que computa score final + level e
- * dispara onComplete que avança o flow externo pra Tela 11 (Reveal).
+ * Header fixo durante todo o Desafio:
+ *   [Brain] Domínio IA: XX/100 [+X] [❤️❤️❤️❤️❤️]
+ *
+ * Quando termina (após Antecipação): chama complete() que computa score final
+ * + level e dispara onComplete que avança o flow externo pra Tela 11 (Reveal).
  */
-import { useEffect } from "react";
-import { AnimatePresence } from "framer-motion";
+import { useState } from "react";
 import { useMiniExperience, type DominioLevel } from "./useMiniExperience";
 import { DominioBar } from "./DominioBar";
 import { ComboToast } from "./ComboToast";
@@ -17,9 +20,14 @@ import { FilterInterestScreen } from "./FilterInterestScreen";
 import { QuizScreen } from "./QuizScreen";
 import { UauOneVisualScreen } from "./UauOneVisualScreen";
 import { UauOneWritingScreen } from "./UauOneWritingScreen";
+import { UauTwoChipsV5Screen } from "./UauTwoChipsV5Screen";
 import { UauTwoSwotScreen } from "./UauTwoSwotScreen";
+import { MistakeReviewScreen } from "./MistakeReviewScreen";
+import { AntecipacaoScreen } from "./AntecipacaoScreen";
+import { MiniExperienceIntro } from "./MiniExperienceIntro";
 import { QUIZZES } from "./quizData";
 import { OnboardingV2Loading } from "../OnboardingV2Loading";
+import { AnimatePresence } from "framer-motion";
 
 interface MiniExperienceFlowProps {
   sessionId: string | null;
@@ -28,16 +36,40 @@ interface MiniExperienceFlowProps {
 
 const QUIZ_BY_KEY = Object.fromEntries(QUIZZES.map((q) => [q.key, q]));
 
+const INTRO_STORAGE_KEY = (sid: string | null) => `mini_intro_dismissed_${sid ?? "anon"}`;
+
 export const MiniExperienceFlow = ({
   sessionId,
   onComplete,
 }: MiniExperienceFlowProps) => {
   const me = useMiniExperience(sessionId);
 
-  // Quando o ultimo step (quiz_critique) tem resposta E o usuário clica Continuar,
-  // o flow chama o orquestrador externo. Isso é feito por handleContinueFinal.
+  // Mostra intro apenas na entrada inicial (não após refresh dentro do desafio).
+  // Persiste em sessionStorage por sessionId pra sobreviver F5 mas zerar em sessão nova.
+  const [introDismissed, setIntroDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return sessionStorage.getItem(INTRO_STORAGE_KEY(sessionId)) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const dismissIntro = () => {
+    try {
+      sessionStorage.setItem(INTRO_STORAGE_KEY(sessionId), "true");
+    } catch {
+      /* sessionStorage indisponível — segue mesmo assim */
+    }
+    setIntroDismissed(true);
+  };
 
   if (!me.ready) return <OnboardingV2Loading />;
+
+  // Tela de transição: só mostra na entrada inicial (filter ainda não respondido)
+  if (!introDismissed && me.subStep === "filter" && me.filterInterest === null) {
+    return <MiniExperienceIntro onContinue={dismissIntro} />;
+  }
 
   const handleQuizSubmit = async (
     key: "input" | "persona" | "context" | "critique",
@@ -52,19 +84,28 @@ export const MiniExperienceFlow = ({
     onComplete(result);
   };
 
-  // Helper p/ saber se chegou na sub-step e renderizar
   const step = me.subStep;
   const stepNumber = me.subStepIndex + 1;
+  const stepLabel = `Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`;
+  const isAntecipacao = step === "antecipacao";
 
   return (
     <>
-      <DominioBar score={me.score} lastPointsGained={me.lastPointsGained} />
+      <DominioBar
+        score={me.score}
+        lastPointsGained={me.lastPointsGained}
+        silent={isAntecipacao}
+        hearts={me.heartsCurrent}
+        heartsLastLostAt={me.heartsLastLostAt}
+        heartsLastGainedAt={me.heartsLastGainedAt}
+      />
       <ComboToast streak={me.comboStreak} bonus={me.lastComboBonus} />
 
       <AnimatePresence mode="wait">
         {step === "filter" && (
           <FilterInterestScreen
             key="filter"
+            stepLabel={stepLabel}
             onSelect={async (value) => {
               await me.setFilterInterest(value);
               setTimeout(me.next, 500);
@@ -76,7 +117,7 @@ export const MiniExperienceFlow = ({
           <QuizScreen
             key="quiz_input"
             quiz={QUIZ_BY_KEY.input}
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            stepLabel={stepLabel}
             difficulty="easy"
             onSubmit={(a, c) => handleQuizSubmit("input", a, c)}
             onContinue={me.next}
@@ -87,7 +128,7 @@ export const MiniExperienceFlow = ({
           <QuizScreen
             key="quiz_persona"
             quiz={QUIZ_BY_KEY.persona}
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            stepLabel={stepLabel}
             difficulty="medium"
             onSubmit={(a, c) => handleQuizSubmit("persona", a, c)}
             onContinue={me.next}
@@ -98,7 +139,7 @@ export const MiniExperienceFlow = ({
           <QuizScreen
             key="quiz_context"
             quiz={QUIZ_BY_KEY.context}
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            stepLabel={stepLabel}
             difficulty="hard"
             onSubmit={(a, c) => handleQuizSubmit("context", a, c)}
             onContinue={me.next}
@@ -108,7 +149,7 @@ export const MiniExperienceFlow = ({
         {step === "uau_one" && me.filterInterest === "writing" && (
           <UauOneWritingScreen
             key="uau_one_writing"
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            stepLabel={stepLabel}
             onComplete={async () => {
               await me.saveUauOne({ writing: "email_rewrite" });
               me.next();
@@ -119,7 +160,7 @@ export const MiniExperienceFlow = ({
         {step === "uau_one" && me.filterInterest !== "writing" && (
           <UauOneVisualScreen
             key="uau_one_visual"
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            stepLabel={stepLabel}
             onComplete={async (data) => {
               await me.saveUauOne(data);
               me.next();
@@ -127,12 +168,23 @@ export const MiniExperienceFlow = ({
           />
         )}
 
-        {step === "uau_two" && (
+        {step === "uau_two_chips" && (
+          <UauTwoChipsV5Screen
+            key="uau_two_chips"
+            stepLabel={stepLabel}
+            onComplete={async () => {
+              await me.saveUauTwoChips();
+              me.next();
+            }}
+          />
+        )}
+
+        {step === "uau_two_swot" && (
           <UauTwoSwotScreen
-            key="uau_two"
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            key="uau_two_swot"
+            stepLabel={stepLabel}
             onComplete={async (data) => {
-              await me.saveUauTwo(data);
+              await me.saveUauTwoSwot(data);
               me.next();
             }}
           />
@@ -142,9 +194,29 @@ export const MiniExperienceFlow = ({
           <QuizScreen
             key="quiz_critique"
             quiz={QUIZ_BY_KEY.critique}
-            stepLabel={`Mini-experiência · ${stepNumber} de ${me.totalSubSteps}`}
+            stepLabel={stepLabel}
             difficulty="hard"
             onSubmit={(a, c) => handleQuizSubmit("critique", a, c)}
+            onContinue={me.next}
+          />
+        )}
+
+        {step === "mistake_review" && (
+          <MistakeReviewScreen
+            key="mistake_review"
+            stepLabel={stepLabel}
+            mistakes={me.mistakes}
+            onComplete={async (data) => {
+              await me.saveMistakeReview(data);
+              me.next();
+            }}
+          />
+        )}
+
+        {step === "antecipacao" && (
+          <AntecipacaoScreen
+            key="antecipacao"
+            stepLabel={stepLabel}
             onContinue={handleFinalContinue}
           />
         )}
